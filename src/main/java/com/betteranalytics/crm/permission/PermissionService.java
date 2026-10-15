@@ -1,6 +1,8 @@
 package com.betteranalytics.crm.permission;
 
 import com.betteranalytics.crm.entity.*;
+import com.betteranalytics.crm.permission.cache.NoopPermissionScopeCache;
+import com.betteranalytics.crm.permission.cache.PermissionScopeCache;
 import com.betteranalytics.crm.repository.*;
 import com.betteranalytics.crm.repository.AuditEventRepository;
 import org.slf4j.Logger;
@@ -44,17 +46,20 @@ public class PermissionService {
     private final TeamMemberRepository   teamMemberRepository;
     private final DelegationRepository   delegationRepository;
     private final AuditEventRepository   auditEventRepository;
+    private final PermissionScopeCache   scopeCache;
 
     public PermissionService(UserRepository userRepository,
                              TeamRepository teamRepository,
                              TeamMemberRepository teamMemberRepository,
                              DelegationRepository delegationRepository,
-                             AuditEventRepository auditEventRepository) {
+                             AuditEventRepository auditEventRepository,
+                             org.springframework.beans.factory.ObjectProvider<PermissionScopeCache> scopeCache) {
         this.userRepository       = userRepository;
         this.teamRepository       = teamRepository;
         this.teamMemberRepository = teamMemberRepository;
         this.delegationRepository = delegationRepository;
         this.auditEventRepository = auditEventRepository;
+        this.scopeCache           = scopeCache.getIfAvailable(NoopPermissionScopeCache::new);
     }
 
     // ── Step 1: tenant ─────────────────────────────────────────────────────────
@@ -152,6 +157,15 @@ public class PermissionService {
         return managedUserIds(actor).contains(targetUserId) || delegatedOwnerIds(actor).contains(targetUserId);
     }
 
+    /**
+     * Ids of the users in the actor's team scope (self + direct reports + rosters
+     * of teams the actor leads) — the reporting tree used for TEAM-scoped views
+     * that are about people rather than owned records, e.g. the audit log.
+     */
+    public Set<Long> teamScopeUserIds(User actor) {
+        return managedUserIds(actor);
+    }
+
     /** Direct reports + rosters of led teams, without delegations — "people who answer to me". */
     public boolean isManagedBy(User manager, Long targetUserId) {
         return targetUserId != null && managedUserIds(manager).contains(targetUserId);
@@ -183,7 +197,7 @@ public class PermissionService {
      * without the cache each row cost several queries.
      */
     private Set<Long> managedUserIds(User actor) {
-        return requestCached("managed:" + actor.getId(), () -> {
+        return requestCached(actor, "managed:" + actor.getId(), () -> {
             Set<Long> ids = new HashSet<>();
             ids.add(actor.getId());
             userRepository.findByReportsToId(actor.getId()).forEach(u -> ids.add(u.getId()));
@@ -199,7 +213,7 @@ public class PermissionService {
 
     /** Union of every active delegator's scope where actor is the delegate (cached per request). */
     private Set<Long> delegatedOwnerIds(User actor) {
-        return requestCached("delegated:" + actor.getId(), () -> {
+        return requestCached(actor, "delegated:" + actor.getId() + ":" + LocalDate.now(), () -> {
             Set<Long> ids = new HashSet<>();
             List<Delegation> delegations = delegationRepository
                     .findActiveDelegationsByDelegate(actor.getId(), LocalDate.now());
@@ -245,18 +259,21 @@ public class PermissionService {
     }
 
     /**
-     * Request-scoped memoisation via RequestContextHolder. Outside an HTTP
-     * request (schedulers, async jobs) there is no request scope, so we just
-     * compute — correctness never depends on the cache.
+     * Request-scoped memoisation via RequestContextHolder, on top of the
+     * optional cross-request {@link PermissionScopeCache} (Redis, ~60 s,
+     * evicted per organization on team/user/delegation changes). Outside an
+     * HTTP request (schedulers, async jobs) there is no request scope, so we
+     * just compute — correctness never depends on either cache.
      */
     @SuppressWarnings("unchecked")
-    private Set<Long> requestCached(String key, Supplier<Set<Long>> compute) {
+    private Set<Long> requestCached(User actor, String key, Supplier<Set<Long>> compute) {
+        Supplier<Set<Long>> shared = () -> scopeCache.get(actor.getOrganizationId(), key, compute);
         RequestAttributes attrs = RequestContextHolder.getRequestAttributes();
-        if (attrs == null) return compute.get();
+        if (attrs == null) return shared.get();
         String attr = SCOPE_CACHE_PREFIX + key;
         Object cached = attrs.getAttribute(attr, RequestAttributes.SCOPE_REQUEST);
         if (cached instanceof Set<?> set) return (Set<Long>) set;
-        Set<Long> value = Collections.unmodifiableSet(compute.get());
+        Set<Long> value = Collections.unmodifiableSet(shared.get());
         attrs.setAttribute(attr, value, RequestAttributes.SCOPE_REQUEST);
         return value;
     }
