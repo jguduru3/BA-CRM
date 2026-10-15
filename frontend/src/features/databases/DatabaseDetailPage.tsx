@@ -14,6 +14,7 @@ import { Modal } from "@/components/ui/Modal";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { Tabs } from "@/components/ui/Tabs";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
+import { SafeLink } from "@/components/ui/SafeLink";
 import {
   cellValue,
   DbProperty,
@@ -383,9 +384,9 @@ function CellDisplay({ prop, value }: { prop: DbProperty; value: unknown }) {
   if (prop.type === "select") return <span className="badge-neutral">{String(value)}</span>;
   if (prop.type === "url")
     return (
-      <a href={String(value)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} style={{ color: "var(--brand-600)" }}>
-        {String(value)}
-      </a>
+      <span onClick={(e) => e.stopPropagation()}>
+        <SafeLink href={String(value)} />
+      </span>
     );
   return <span>{String(value)}</span>;
 }

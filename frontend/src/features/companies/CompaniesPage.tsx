@@ -12,6 +12,7 @@ import { Drawer } from "@/components/ui/Drawer";
 import { SearchInput } from "@/components/ui/SearchInput";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { CompanyDraft, CompanyForm } from "./CompanyForm";
+import { safeHref } from "@/components/ui/SafeLink";
 
 export default function CompaniesPage() {
   const [search, setSearch] = useState("");
@@ -70,11 +71,11 @@ export default function CompaniesPage() {
       key: "website",
       header: "Website",
       render: (r) =>
-        r.website ? (
+        r.website && safeHref(r.website) ? (
           <a
-            href={r.website.startsWith("http") ? r.website : `https://${r.website}`}
+            href={safeHref(r.website)!}
             target="_blank"
-            rel="noreferrer"
+            rel="noopener noreferrer nofollow"
             onClick={(e) => e.stopPropagation()}
             className="inline-flex items-center gap-1 text-sm"
             style={{ color: "var(--brand-600)" }}

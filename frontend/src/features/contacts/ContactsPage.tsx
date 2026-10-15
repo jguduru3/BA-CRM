@@ -16,6 +16,7 @@ import { Modal } from "@/components/ui/Modal";
 import { SearchInput } from "@/components/ui/SearchInput";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { ContactDraft, ContactForm } from "./ContactForm";
+import { safeHref } from "@/components/ui/SafeLink";
 
 export default function ContactsPage() {
   const [search, setSearch] = useState("");
@@ -220,11 +221,11 @@ export default function ContactsPage() {
         title={selected ? selected.name : "New contact"}
         headerExtra={
           <>
-            {selected?.linkedin && (
+            {selected?.linkedin && safeHref(selected.linkedin) && (
               <a
-                href={selected.linkedin.startsWith("http") ? selected.linkedin : `https://${selected.linkedin}`}
+                href={safeHref(selected.linkedin)!}
                 target="_blank"
-                rel="noreferrer"
+                rel="noopener noreferrer nofollow"
                 className="btn-icon"
                 title="Open LinkedIn"
               >
