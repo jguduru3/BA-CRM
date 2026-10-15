@@ -1,9 +1,11 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Filter, Linkedin, Mail, Phone, Plus, Settings2, Trash2, UserSquare2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Linkedin, Mail, Phone, Plus, Settings2, Trash2, UserSquare2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { api } from "@/lib/api";
-import { useCompaniesLookup, useContactCategories, useEntityCrud, useUsersLookup } from "@/lib/hooks";
-import { formatDate } from "@/lib/format";
+import { isManagerUp, isReadOnly, useAuthStore } from "@/lib/auth";
+import { useCompaniesLookup, useContactCategories, useUsersLookup } from "@/lib/hooks";
+import { formatDate, formatDateTime } from "@/lib/format";
 import { toast } from "@/lib/toast";
 import type { Contact, ContactCategory } from "@/lib/types";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -13,14 +15,18 @@ import { Column, DataTable } from "@/components/ui/DataTable";
 import { Drawer } from "@/components/ui/Drawer";
 import { Field, FieldGrid } from "@/components/ui/Field";
 import { Modal } from "@/components/ui/Modal";
+import { QueryError } from "@/components/ui/QueryError";
+import { useReason } from "@/components/ui/ReasonDialog";
 import { SearchInput } from "@/components/ui/SearchInput";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
-import { ContactDraft, ContactForm } from "./ContactForm";
 import { safeHref } from "@/components/ui/SafeLink";
+import { changedFields, ExportButton, FilterSelect, ListToolbar, saveErrorMessage } from "@/features/crm/ListParts";
+import { useServerList } from "@/features/crm/useServerList";
+import { ContactDraft, ContactForm } from "./ContactForm";
 
 export default function ContactsPage() {
-  const [search, setSearch] = useState("");
-  const [categoryFilter, setCategoryFilter] = useState<number | "">("");
+  const [params, setParams] = useSearchParams();
+  const [categoryFilter, setCategoryFilter] = useState("");
   const [industryFilter, setIndustryFilter] = useState("");
   const [countryFilter, setCountryFilter] = useState("");
   const [selected, setSelected] = useState<Contact | null>(null);
@@ -30,38 +36,75 @@ export default function ContactsPage() {
   const users = useUsersLookup();
   const companies = useCompaniesLookup();
   const categories = useContactCategories();
-  const { confirm, node: confirmNode } = useConfirm();
+  const qc = useQueryClient();
+  const { askReason, node: reasonNode } = useReason();
+  const role = useAuthStore((s) => s.user?.role);
+  const readOnly = isReadOnly(role);
+  const manager = isManagerUp(role);
 
-  const { list, create, update, remove } = useEntityCrud<Contact>("contacts", {
-    params: { search, limit: 500 },
-    label: "Contact",
+  const table = useServerList<Contact>("contacts", {
+    filters: { categoryId: categoryFilter, industry: industryFilter, country: countryFilter },
+    defaultSort: { key: "name", dir: "asc" },
   });
 
   useEffect(() => {
     setDraft(selected ?? { status: "Active" });
   }, [selected, creating]);
 
+  useEffect(() => {
+    const id = params.get("open");
+    if (!id) return;
+    api
+      .get<Contact>(`/contacts/${id}`)
+      .then((r) => setSelected(r.data))
+      .catch((e) => toast.error(e instanceof Error ? e.message : "Contact not found"));
+    params.delete("open");
+    setParams(params, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const userName = (id: number | null) => users.data?.find((u) => u.id === id)?.name;
   const companyName = (id: number | null) => companies.data?.data.find((c) => c.id === id)?.name;
   const categoryOf = (id: number | null) => categories.data?.find((c) => c.id === id);
 
-  const filtered = useMemo(() => {
-    return (list.data?.data ?? []).filter((c) => {
-      if (categoryFilter && c.categoryId !== categoryFilter) return false;
-      if (industryFilter && c.industry?.toLowerCase() !== industryFilter.toLowerCase()) return false;
-      if (countryFilter && c.country?.toLowerCase() !== countryFilter.toLowerCase()) return false;
-      return true;
-    });
-  }, [list.data, categoryFilter, industryFilter, countryFilter]);
+  // Filter choices come from what's on screen, plus whatever is currently selected.
+  const optionsFrom = (pick: (c: Contact) => string | null, current: string) =>
+    Array.from(new Set([...table.rows.map(pick), current].filter(Boolean))) as string[];
 
-  const industryOptions = Array.from(new Set((list.data?.data ?? []).map((c) => c.industry).filter(Boolean))) as string[];
-  const countryOptions = Array.from(new Set((list.data?.data ?? []).map((c) => c.country).filter(Boolean))) as string[];
+  const closeDrawers = () => {
+    setSelected(null);
+    setCreating(false);
+  };
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["contacts"] });
+
+  const save = useMutation({
+    mutationFn: async () =>
+      selected
+        ? (await api.patch<Contact>(`/contacts/${selected.id}`, changedFields(selected, draft))).data
+        : (await api.post<Contact>("/contacts", draft)).data,
+    onSuccess: () => {
+      toast.success(selected ? "Contact updated" : "Contact created");
+      invalidate();
+      closeDrawers();
+    },
+    onError: (e: Error) => toast.error(saveErrorMessage(e, "contact")),
+  });
+
+  const remove = useMutation({
+    mutationFn: async ({ id, reason }: { id: number; reason: string }) => api.delete(`/contacts/${id}`, { params: { reason } }),
+    onSuccess: () => {
+      toast.success("Contact moved to trash");
+      invalidate();
+      closeDrawers();
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
 
   const columns: Column<Contact>[] = [
     {
       key: "name",
       header: "Contact",
-      sortValue: (r) => r.name,
+      sortKey: "name",
       render: (r) => (
         <div className="flex items-center gap-2.5 min-w-0">
           <Avatar name={r.name} size={28} />
@@ -79,6 +122,7 @@ export default function ContactsPage() {
     {
       key: "category",
       header: "Category",
+      hideOnMobile: true,
       render: (r) => {
         const cat = categoryOf(r.categoryId);
         return cat ? (
@@ -93,16 +137,18 @@ export default function ContactsPage() {
     {
       key: "geo",
       header: "Industry / Geography",
+      hideOnMobile: true,
       render: (r) => (
         <span className="text-sm truncate" style={{ color: "var(--ink-secondary)" }}>
           {[r.industry, r.country, r.state].filter(Boolean).join(" · ") || "—"}
         </span>
       ),
     },
-    { key: "status", header: "Status", sortValue: (r) => r.status, render: (r) => <StageBadge value={r.status} /> },
+    { key: "status", header: "Status", sortKey: "status", render: (r) => <StageBadge value={r.status} /> },
     {
       key: "contact",
       header: "Contact info",
+      hideOnMobile: true,
       render: (r) => (
         <div className="flex items-center gap-3 text-xs" style={{ color: "var(--ink-secondary)" }}>
           {r.email && (
@@ -121,12 +167,14 @@ export default function ContactsPage() {
     {
       key: "lastContactedAt",
       header: "Last contacted",
-      sortValue: (r) => r.lastContactedAt ?? "",
+      sortKey: "lastContactedAt",
+      hideOnMobile: true,
       render: (r) => <span className="text-sm">{formatDate(r.lastContactedAt)}</span>,
     },
     {
       key: "owner",
       header: "Owner",
+      hideOnMobile: true,
       render: (r) =>
         r.ownerId ? (
           <div className="flex items-center gap-2">
@@ -139,107 +187,111 @@ export default function ContactsPage() {
     },
   ];
 
-  const closeDrawers = () => {
-    setSelected(null);
-    setCreating(false);
-  };
-
-  const save = () => {
-    if (selected) {
-      update.mutate({ id: selected.id, payload: draft }, { onSuccess: closeDrawers });
-    } else {
-      create.mutate(draft, { onSuccess: closeDrawers });
-    }
-  };
+  const filtered = !!(table.search || categoryFilter || industryFilter || countryFilter);
 
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
         title="Contacts"
-        description={`${filtered.length} of ${list.data?.count ?? 0} people`}
+        description={table.query.data ? `${table.total.toLocaleString()} people${filtered ? " match" : ""}` : "The people you work with"}
         icon={<UserSquare2 size={20} />}
         actions={
           <>
-            <button className="btn-secondary" onClick={() => setCategoriesOpen(true)}>
-              <Settings2 size={15} /> Categories
-            </button>
-            <button className="btn-primary" onClick={() => setCreating(true)}>
-              <Plus size={15} /> New contact
-            </button>
+            {manager && (
+              <button className="btn-secondary" onClick={() => setCategoriesOpen(true)}>
+                <Settings2 size={15} /> <span className="hidden md:inline">Categories</span>
+              </button>
+            )}
+            <ExportButton type="contacts" />
+            {!readOnly && (
+              <button className="btn-primary" onClick={() => setCreating(true)}>
+                <Plus size={15} /> <span className="hidden sm:inline">New contact</span>
+              </button>
+            )}
           </>
         }
       />
 
-      <div className="flex flex-wrap items-center gap-2">
-        <SearchInput value={search} onChange={setSearch} placeholder="Search contacts…" className="w-full sm:w-64" />
-        <div className="inline-flex items-center gap-1.5 text-xs" style={{ color: "var(--ink-muted)" }}>
-          <Filter size={13} /> Filter:
-        </div>
-        <select className="select w-auto" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value ? Number(e.target.value) : "")}>
-          <option value="">All categories</option>
-          {categories.data?.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name}
-            </option>
-          ))}
-        </select>
-        <select className="select w-auto" value={industryFilter} onChange={(e) => setIndustryFilter(e.target.value)}>
-          <option value="">All industries</option>
-          {industryOptions.map((i) => (
-            <option key={i} value={i}>
-              {i}
-            </option>
-          ))}
-        </select>
-        <select className="select w-auto" value={countryFilter} onChange={(e) => setCountryFilter(e.target.value)}>
-          <option value="">All countries</option>
-          {countryOptions.map((c) => (
-            <option key={c} value={c}>
-              {c}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <DataTable
-        columns={columns}
-        rows={filtered}
-        loading={list.isLoading}
-        onRowClick={setSelected}
-        emptyTitle="No contacts yet"
-        emptyDescription="Add the people you work with at your accounts."
-        emptyAction={
-          <button className="btn-primary" onClick={() => setCreating(true)}>
-            <Plus size={15} /> New contact
-          </button>
+      <ListToolbar
+        left={
+          <>
+            <FilterSelect
+              ariaLabel="Category"
+              allLabel="All categories"
+              value={categoryFilter}
+              onChange={setCategoryFilter}
+              options={(categories.data ?? []).map((c) => ({ value: String(c.id), label: c.name }))}
+            />
+            <FilterSelect
+              ariaLabel="Industry"
+              allLabel="All industries"
+              value={industryFilter}
+              onChange={setIndustryFilter}
+              options={optionsFrom((c) => c.industry, industryFilter)}
+            />
+            <FilterSelect
+              ariaLabel="Country"
+              allLabel="All countries"
+              value={countryFilter}
+              onChange={setCountryFilter}
+              options={optionsFrom((c) => c.country, countryFilter)}
+            />
+          </>
         }
+        right={<SearchInput value={table.search} onChange={table.setSearch} placeholder="Search name, email, phone…" className="w-full sm:w-72" />}
       />
+
+      {table.query.isError ? (
+        <div className="glass-card">
+          <QueryError error={table.query.error} onRetry={() => table.query.refetch()} title="Couldn't load contacts" />
+        </div>
+      ) : (
+        <DataTable
+          columns={columns}
+          rows={table.rows}
+          loading={table.query.isLoading}
+          fetching={table.query.isFetching && !table.query.isLoading}
+          onRowClick={setSelected}
+          pagination={table.pagination}
+          sort={table.sort}
+          onSortChange={table.setSort}
+          emptyTitle={filtered ? "No contacts match" : "No contacts yet"}
+          emptyDescription={filtered ? "Try another search or clear the filters." : "Add the people you work with at your accounts."}
+          emptyAction={
+            !filtered && !readOnly ? (
+              <button className="btn-primary" onClick={() => setCreating(true)}>
+                <Plus size={15} /> New contact
+              </button>
+            ) : undefined
+          }
+        />
+      )}
 
       <Drawer
         open={!!selected || creating}
         onClose={closeDrawers}
         title={selected ? selected.name : "New contact"}
+        subtitle={selected ? `Updated ${formatDateTime(selected.updatedAt)}` : "Add a person"}
         headerExtra={
           <>
             {selected?.linkedin && safeHref(selected.linkedin) && (
-              <a
-                href={safeHref(selected.linkedin)!}
-                target="_blank"
-                rel="noopener noreferrer nofollow"
-                className="btn-icon"
-                title="Open LinkedIn"
-              >
+              <a href={safeHref(selected.linkedin)!} target="_blank" rel="noopener noreferrer nofollow" className="btn-icon" title="Open LinkedIn">
                 <Linkedin size={16} />
               </a>
             )}
-            {selected && (
+            {selected && manager && (
               <button
                 className="btn-icon"
                 style={{ color: "var(--critical)" }}
                 title="Move to trash"
                 onClick={async () => {
-                  const ok = await confirm("Delete this contact?", `"${selected.name}" will be moved to trash.`);
-                  if (ok) remove.mutate({ id: selected.id, reason: "Deleted from contact panel" }, { onSuccess: closeDrawers });
+                  const reason = await askReason({
+                    title: "Move this contact to trash?",
+                    description: `"${selected.name}" can be restored from Trash later.`,
+                    confirmLabel: "Move to trash",
+                    danger: true,
+                  });
+                  if (reason) remove.mutate({ id: selected.id, reason });
                 }}
               >
                 <Trash2 size={16} />
@@ -253,14 +305,16 @@ export default function ContactsPage() {
           <button className="btn-ghost" onClick={closeDrawers}>
             Cancel
           </button>
-          <button className="btn-primary" disabled={!draft.name} onClick={save}>
-            {selected ? "Save changes" : "Create contact"}
-          </button>
+          {!readOnly && (
+            <button className="btn-primary" disabled={!draft.name || save.isPending} onClick={() => save.mutate()}>
+              {save.isPending ? "Saving…" : selected ? "Save changes" : "Create contact"}
+            </button>
+          )}
         </div>
       </Drawer>
 
       <CategoryManager open={categoriesOpen} onClose={() => setCategoriesOpen(false)} />
-      {confirmNode}
+      {reasonNode}
     </div>
   );
 }
