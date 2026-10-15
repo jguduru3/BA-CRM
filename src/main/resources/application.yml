@@ -76,6 +76,7 @@ management:
       probes:
         enabled: true
       show-details: never
+      show-components: never
   health:
     redis:
       enabled: ${REDIS_ENABLED:false}
@@ -96,7 +97,8 @@ springdoc:
 
 app:
   jwt:
-    secret: ${JWT_SECRET:change_this_to_a_long_random_string_in_production}
+    # No default: required (32+ bytes) in every profile except local and test.
+    secret: ${JWT_SECRET:}
     expiration-ms: ${JWT_EXPIRATION_MS:43200000}   # 12h
     # Refuse to start with a missing/short/known-default JWT secret or encryption
     # key. Relaxed only in the local and test profiles.
@@ -110,7 +112,15 @@ app:
   encryption-key-previous: ${ENCRYPTION_KEY_PREVIOUS:}
 
   redis:
+    # Off by default: no Redis connection is ever attempted (RedisAutoConfigToggle).
     enabled: ${REDIS_ENABLED:false}
+    # TEAM-scope permission sets are cached this long when Redis is on.
+    permission-cache-ttl-seconds: ${PERMISSION_CACHE_TTL_SECONDS:60}
+
+  bootstrap:
+    # First-admin bootstrap (BootstrapAdminRunner): replaces the published V1 seed
+    # password of admin@betteranalytics.in once; the forced change stays on.
+    admin-password: ${BOOTSTRAP_ADMIN_PASSWORD:}
 
   applicationinsights:
     # Telemetry is attached at start-up only when this is set.
@@ -124,6 +134,10 @@ app:
   rate-limit:
     per-ip-per-minute: ${RATE_LIMIT_PER_IP_PER_MINUTE:1200}
     api-key-per-minute: ${RATE_LIMIT_API_KEY_PER_MINUTE:600}
+    # Sign-in: per client IP per minute, and per email per window.
+    login-per-ip-per-minute: ${RATE_LIMIT_LOGIN_PER_IP_PER_MINUTE:20}
+    login-per-email: ${RATE_LIMIT_LOGIN_PER_EMAIL:10}
+    login-email-window-minutes: 5
 
   auth:
     max-failed-logins: 5
@@ -172,6 +186,9 @@ spring:
 
 app:
   jwt:
+    # Dev-only fallback so `mvn spring-boot:run` works with zero setup. Never used
+    # outside the local profile (every other profile requires JWT_SECRET).
+    secret: ${JWT_SECRET:local-dev-only-insecure-jwt-secret-do-not-deploy}
     enforce-strong-secret: false
   outbound:
     allow-private-networks: true
