@@ -8,7 +8,7 @@ import org.springframework.data.repository.query.Param;
 import java.util.List;
 import java.util.Optional;
 
-public interface MeetingRepository extends JpaRepository<Meeting, Long> {
+public interface MeetingRepository extends JpaRepository<Meeting, Long>, org.springframework.data.jpa.repository.JpaSpecificationExecutor<Meeting> {
     List<Meeting> findByOrganizationIdOrderByStartAtDesc(Long organizationId);
     List<Meeting> findByOrganizationIdOrderByStartAtDesc(Long organizationId, Pageable pageable);
     List<Meeting> findByOrganizationIdAndOrganizerIdOrderByStartAtDesc(Long organizationId, Long organizerId, Pageable pageable);

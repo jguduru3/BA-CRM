@@ -7,24 +7,29 @@ import com.betteranalytics.crm.permission.PermissionService;
 import com.betteranalytics.crm.permission.ResourceType;
 import com.betteranalytics.crm.repository.*;
 import com.betteranalytics.crm.security.CurrentUser;
-import org.springframework.data.domain.PageRequest;
+import com.betteranalytics.crm.service.AuditService;
+import com.betteranalytics.crm.service.Paging;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.persistence.criteria.Predicate;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
 /**
- * Documents (Notion-style rich-text pages linked to any CRM record).
+ * Documents (Notion-style pages linked to any CRM record). The page body is a
+ * block list stored by RecordPageController under relatedType "Document";
+ * {@code contentJson} is the legacy plain-text body, kept for compatibility.
  *
- * GET    /api/documents                               — list all documents in org
- * GET    /api/documents?relatedType=X&relatedId=Y    — list documents linked to a record
+ * GET    /api/documents                               — list (?q=&relatedType=&relatedId=&page=&size=)
  * POST   /api/documents                               — create document
  * GET    /api/documents/{id}                          — get document
- * PUT    /api/documents/{id}                          — update document content/title
- * DELETE /api/documents/{id}                          — soft-delete
+ * PUT    /api/documents/{id}                          — partial update (only the keys sent change)
+ * DELETE /api/documents/{id}                          — soft-delete (its page blocks are kept for restore)
  * POST   /api/documents/{id}/restore                  — restore
  */
 @RestController
@@ -36,6 +41,8 @@ public class DocumentController {
     private final DocumentRepository documentRepository;
     private final PermissionService  permissionService;
     private final CurrentUser        currentUser;
+    private final AuditService       auditService;
+    private final ObjectMapper       objectMapper;
     private final LeadRepository leadRepository;
     private final OpportunityRepository opportunityRepository;
     private final ContactRepository contactRepository;
@@ -45,6 +52,8 @@ public class DocumentController {
     public DocumentController(DocumentRepository documentRepository,
                               PermissionService permissionService,
                               CurrentUser currentUser,
+                              AuditService auditService,
+                              ObjectMapper objectMapper,
                               LeadRepository leadRepository,
                               OpportunityRepository opportunityRepository,
                               ContactRepository contactRepository,
@@ -53,6 +62,8 @@ public class DocumentController {
         this.documentRepository = documentRepository;
         this.permissionService = permissionService;
         this.currentUser = currentUser;
+        this.auditService = auditService;
+        this.objectMapper = objectMapper;
         this.leadRepository = leadRepository;
         this.opportunityRepository = opportunityRepository;
         this.contactRepository = contactRepository;
@@ -63,29 +74,44 @@ public class DocumentController {
     @GetMapping
     public ResponseEntity<List<Document>> list(@RequestParam(required = false) String relatedType,
                                                 @RequestParam(required = false) Long relatedId,
-                                                @RequestParam(defaultValue = "500") int limit) {
+                                                @RequestParam(required = false) String q,
+                                                @RequestParam(required = false) Integer limit,
+                                                @RequestParam(required = false) Integer page,
+                                                @RequestParam(required = false) Integer size) {
         User actor = currentUser.get();
-        permissionService.require(actor, Action.VIEW, ResourceType.DOCUMENT, actor.getOrganizationId(), null);
-        PageRequest page = PageRequest.of(0, Math.max(1, Math.min(limit, 500)));
-        List<Document> docs = relatedType != null && relatedId != null
-                ? documentRepository.findByOrganizationIdAndRelatedTypeAndRelatedIdOrderByUpdatedAtDesc(
-                        actor.getOrganizationId(), relatedType, relatedId, page)
-                : documentRepository.findByOrganizationIdOrderByUpdatedAtDesc(actor.getOrganizationId(), page);
-        return ResponseEntity.ok(docs.stream()
-                .filter(d -> permissionService.can(actor, Action.VIEW, ResourceType.DOCUMENT, d.getOrganizationId(), d.getOwnerId()))
-                .toList());
+        Long orgId = actor.getOrganizationId();
+        permissionService.require(actor, Action.VIEW, ResourceType.DOCUMENT, orgId, actor.getId());
+        boolean orgWide = permissionService.can(actor, Action.VIEW, ResourceType.DOCUMENT, orgId, Long.MIN_VALUE);
+        Specification<Document> spec = (root, query, cb) -> {
+            List<Predicate> ps = new ArrayList<>();
+            ps.add(cb.equal(root.get("organizationId"), orgId));
+            if (!orgWide) ps.add(cb.equal(root.get("ownerId"), actor.getId()));
+            if (relatedType != null && relatedId != null) {
+                ps.add(cb.equal(root.get("relatedType"), relatedType));
+                ps.add(cb.equal(root.get("relatedId"), relatedId));
+            }
+            if (q != null && !q.isBlank()) {
+                ps.add(cb.like(cb.lower(root.get("title")),
+                        "%" + ProjectController.escapeLike(q.trim().toLowerCase(Locale.ROOT)) + "%", '\\'));
+            }
+            return cb.and(ps.toArray(new Predicate[0]));
+        };
+        return ResponseEntity.ok(documentRepository.findAll(spec, Paging.of(page, size, limit, 500, 500,
+                Sort.by(Sort.Order.desc("updatedAt"), Sort.Order.desc("id")))).getContent());
     }
 
     @PostMapping
-    public ResponseEntity<?> create(@RequestBody Document body) {
+    @Transactional
+    public ResponseEntity<?> create(@RequestBody Map<String, Object> raw) {
         User actor = currentUser.get();
         permissionService.require(actor, Action.CREATE, ResourceType.DOCUMENT, actor.getOrganizationId(), null);
+        Document body = bind(raw);
         String relatedType = blankToNull(body.getRelatedType());
         String relatedError = validateRelated(relatedType, body.getRelatedId(), actor.getOrganizationId());
         if (relatedError != null) return ResponseEntity.badRequest().body(Map.of("error", relatedError));
         Document doc = new Document();
         doc.setOrganizationId(actor.getOrganizationId());
-        doc.setTitle(body.getTitle() != null ? body.getTitle() : "Untitled");
+        doc.setTitle(body.getTitle() != null && !body.getTitle().isBlank() ? body.getTitle().trim() : "Untitled");
         doc.setContentJson(body.getContentJson());
         doc.setRelatedType(relatedType);
         doc.setRelatedId(relatedType != null ? body.getRelatedId() : null);
@@ -94,7 +120,9 @@ public class DocumentController {
         Instant now = Instant.now();
         doc.setCreatedAt(now);
         doc.setUpdatedAt(now);
-        return ResponseEntity.ok(documentRepository.save(doc));
+        Document saved = documentRepository.save(doc);
+        auditService.log("create", "documents", saved.getId(), saved.getTitle(), null, saved);
+        return ResponseEntity.ok(saved);
     }
 
     @GetMapping("/{id}")
@@ -102,53 +130,63 @@ public class DocumentController {
         User actor = currentUser.get();
         Document doc = documentRepository.findByIdAndOrganizationId(id, actor.getOrganizationId()).orElse(null);
         if (doc == null) return ResponseEntity.notFound().build();
-        permissionService.require(actor, Action.VIEW, ResourceType.DOCUMENT, actor.getOrganizationId(), doc.getOwnerId());
+        permissionService.require(actor, Action.VIEW, ResourceType.DOCUMENT, doc.getOrganizationId(), doc.getOwnerId());
         return ResponseEntity.ok(doc);
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<?> update(@PathVariable Long id, @RequestBody Document body) {
+    @Transactional
+    public ResponseEntity<?> update(@PathVariable Long id, @RequestBody Map<String, Object> raw) {
         User actor = currentUser.get();
         Document doc = documentRepository.findByIdAndOrganizationId(id, actor.getOrganizationId()).orElse(null);
         if (doc == null) return ResponseEntity.notFound().build();
-        permissionService.require(actor, Action.EDIT, ResourceType.DOCUMENT, actor.getOrganizationId(), doc.getOwnerId());
-        if (body.getTitle() != null) doc.setTitle(body.getTitle());
-        if (body.getContentJson() != null) doc.setContentJson(body.getContentJson());
-        if (body.getRelatedType() != null || body.getRelatedId() != null) {
-            String relatedType = body.getRelatedType() != null ? blankToNull(body.getRelatedType()) : doc.getRelatedType();
-            Long relatedId = body.getRelatedId() != null ? body.getRelatedId() : doc.getRelatedId();
+        permissionService.require(actor, Action.EDIT, ResourceType.DOCUMENT, doc.getOrganizationId(), doc.getOwnerId());
+        Document body = bind(raw);
+        if (body.getTitle() != null && !body.getTitle().isBlank()) doc.setTitle(body.getTitle().trim());
+        if (raw.containsKey("contentJson")) doc.setContentJson(body.getContentJson());
+        if (raw.containsKey("relatedType") || raw.containsKey("relatedId")) {
+            String relatedType = raw.containsKey("relatedType") ? blankToNull(body.getRelatedType()) : doc.getRelatedType();
+            Long relatedId = raw.containsKey("relatedId") ? body.getRelatedId() : doc.getRelatedId();
             String relatedError = validateRelated(relatedType, relatedId, actor.getOrganizationId());
             if (relatedError != null) return ResponseEntity.badRequest().body(Map.of("error", relatedError));
             doc.setRelatedType(relatedType);
             doc.setRelatedId(relatedType != null ? relatedId : null);
         }
         doc.setUpdatedAt(Instant.now());
-        return ResponseEntity.ok(documentRepository.save(doc));
+        Document saved = documentRepository.save(doc);
+        auditService.log("update", "documents", id, saved.getTitle(), null, saved);
+        return ResponseEntity.ok(saved);
     }
 
+    /** Soft delete. The document's page blocks stay attached so a restore brings the page back intact. */
     @DeleteMapping("/{id}")
+    @Transactional
     public ResponseEntity<Void> delete(@PathVariable Long id) {
         User actor = currentUser.get();
         Document doc = documentRepository.findByIdAndOrganizationId(id, actor.getOrganizationId()).orElse(null);
         if (doc == null) return ResponseEntity.notFound().build();
-        permissionService.require(actor, Action.DELETE, ResourceType.DOCUMENT, actor.getOrganizationId(), doc.getOwnerId());
+        permissionService.require(actor, Action.DELETE, ResourceType.DOCUMENT, doc.getOrganizationId(), doc.getOwnerId());
         Instant now = Instant.now();
         doc.setDeletedAt(now);
         doc.setDeletedBy(actor.getId());
         documentRepository.save(doc);
+        auditService.log("delete", "documents", id, doc.getTitle(), doc, null);
         return ResponseEntity.noContent().build();
     }
 
     @PostMapping("/{id}/restore")
+    @Transactional
     public ResponseEntity<Document> restore(@PathVariable Long id) {
         User actor = currentUser.get();
         Document doc = documentRepository.findByIdAndOrganizationIdIncludingDeleted(id, actor.getOrganizationId()).orElse(null);
         if (doc == null) return ResponseEntity.notFound().build();
-        permissionService.require(actor, Action.RESTORE, ResourceType.DOCUMENT, actor.getOrganizationId(), doc.getOwnerId());
+        permissionService.require(actor, Action.RESTORE, ResourceType.DOCUMENT, doc.getOrganizationId(), doc.getOwnerId());
         doc.setDeletedAt(null);
         doc.setDeletedBy(null);
         doc.setUpdatedAt(Instant.now());
-        return ResponseEntity.ok(documentRepository.save(doc));
+        Document saved = documentRepository.save(doc);
+        auditService.log("restore", "documents", id, saved.getTitle(), null, saved);
+        return ResponseEntity.ok(saved);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -171,5 +209,15 @@ public class DocumentController {
 
     private static String blankToNull(String s) {
         return s == null || s.isBlank() ? null : s;
+    }
+
+    /** Typed view of a JSON body; type mismatches become IllegalArgumentException (400). */
+    private Document bind(Map<String, Object> raw) {
+        if (raw == null) throw new IllegalArgumentException("request body is required");
+        try {
+            return objectMapper.convertValue(raw, Document.class);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("invalid request body");
+        }
     }
 }

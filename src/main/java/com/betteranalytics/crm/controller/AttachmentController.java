@@ -11,7 +11,6 @@ import com.betteranalytics.crm.service.FileStorageService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.io.InputStreamResource;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -72,6 +71,7 @@ public class AttachmentController {
     private final WhiteboardBoardRepository whiteboardBoardRepository;
     private final WhiteboardItemRepository whiteboardItemRepository;
     private final ProjectRepository projectRepository;
+    private final ProjectMemberRepository projectMemberRepository;
 
     public AttachmentController(AttachmentRepository attachmentRepository,
                                  FileStorageService storageService,
@@ -89,7 +89,8 @@ public class AttachmentController {
                                  MeetingRepository meetingRepository,
                                  WhiteboardBoardRepository whiteboardBoardRepository,
                                  WhiteboardItemRepository whiteboardItemRepository,
-                                 ProjectRepository projectRepository) {
+                                 ProjectRepository projectRepository,
+                                 ProjectMemberRepository projectMemberRepository) {
         this.attachmentRepository = attachmentRepository;
         this.storageService = storageService;
         this.currentUser = currentUser;
@@ -107,18 +108,21 @@ public class AttachmentController {
         this.whiteboardBoardRepository = whiteboardBoardRepository;
         this.whiteboardItemRepository = whiteboardItemRepository;
         this.projectRepository = projectRepository;
+        this.projectMemberRepository = projectMemberRepository;
     }
 
     @GetMapping
     public ResponseEntity<?> list(@RequestParam String relatedType, @RequestParam Long relatedId,
-                                  @RequestParam(defaultValue = "200") int limit) {
+                                  @RequestParam(required = false) Integer limit,
+                                  @RequestParam(required = false) Integer page,
+                                  @RequestParam(required = false) Integer size) {
         User actor = currentUser.get();
         if (!ALLOWED_TYPES.contains(relatedType)) return badRequest("unsupported relatedType");
         requireParentAccess(actor, relatedType, relatedId, false);
-        int capped = Math.max(1, Math.min(limit, MAX_LIST));
         return ResponseEntity.ok(attachmentRepository
                 .findByOrganizationIdAndRelatedTypeAndRelatedIdOrderByCreatedAtDesc(
-                        actor.getOrganizationId(), relatedType, relatedId, PageRequest.of(0, capped)));
+                        actor.getOrganizationId(), relatedType, relatedId,
+                        com.betteranalytics.crm.service.Paging.of(page, size, limit, 200, MAX_LIST, null)));
     }
 
     @PostMapping
@@ -280,9 +284,22 @@ public class AttachmentController {
                 Meeting m = meetingRepository.findByIdAndOrganizationId(relatedId, orgId).orElseThrow(this::parentNotFound);
                 permissionService.require(actor, action, ResourceType.MEETING, m.getOrganizationId(), m.getOrganizerId());
             }
-            // Workspace objects with no ResourceType rules: org membership is the boundary.
-            case "Whiteboard" -> whiteboardBoardRepository.findByIdAndOrganizationId(relatedId, orgId).orElseThrow(this::parentNotFound);
-            case "Project" -> projectRepository.findByIdAndOrganizationId(relatedId, orgId).orElseThrow(this::parentNotFound);
+            case "Whiteboard" -> {
+                WhiteboardBoard b = whiteboardBoardRepository.findByIdAndOrganizationId(relatedId, orgId).orElseThrow(this::parentNotFound);
+                permissionService.require(actor, action, ResourceType.WHITEBOARD, b.getOrganizationId(), b.getCreatedBy());
+            }
+            case "Project" -> {
+                Project p = projectRepository.findByIdAndOrganizationId(relatedId, orgId).orElseThrow(this::parentNotFound);
+                // Uploading to a project is contributing to it: owner scope, or project membership
+                // (non-viewer) layered on top for roles that have the PROJECT edit feature at all.
+                if (!permissionService.can(actor, action, ResourceType.PROJECT, p.getOrganizationId(), p.getOwnerId())) {
+                    boolean member = write
+                            && permissionService.can(actor, Action.EDIT, ResourceType.PROJECT, orgId, actor.getId())
+                            && projectMemberRepository.findByProjectIdAndUserId(p.getId(), actor.getId())
+                                    .map(m -> !"viewer".equals(m.getRole())).orElse(false);
+                    if (!member) permissionService.require(actor, action, ResourceType.PROJECT, p.getOrganizationId(), p.getOwnerId());
+                }
+            }
             default -> throw parentNotFound();
         }
     }

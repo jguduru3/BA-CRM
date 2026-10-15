@@ -10,16 +10,23 @@ import com.betteranalytics.crm.security.CurrentUser;
 import com.betteranalytics.crm.service.AuditService;
 import com.betteranalytics.crm.service.NotificationService;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
+import com.betteranalytics.crm.security.UrlFields;
+import com.betteranalytics.crm.service.Paging;
+import jakarta.persistence.criteria.Predicate;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
+import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/meetings")
@@ -59,31 +66,48 @@ public class MeetingController {
         this.companyRepository = companyRepository;
     }
 
+    /**
+     * Filtering, sorting and paging happen in the database. ORG-scope viewers
+     * page over every meeting; everyone else over meetings they organize, so a
+     * page is always full and {@code count} is the real total.
+     */
     @GetMapping
     public Map<String, Object> list(@RequestParam(required = false) String relatedType,
                                      @RequestParam(required = false) Long relatedId,
-                                     @RequestParam(defaultValue = "100") int limit) {
+                                     @RequestParam(required = false) String status,
+                                     @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant from,
+                                     @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant to,
+                                     @RequestParam(required = false) String q,
+                                     @RequestParam(required = false) Integer limit,
+                                     @RequestParam(required = false) Integer page,
+                                     @RequestParam(required = false) Integer size) {
         User actor = currentUser.get();
         Long orgId = actor.getOrganizationId();
-        Pageable page = PageRequest.of(0, Math.max(1, Math.min(limit, 500)));
-        // ORG-scope viewers page straight from the DB; everyone else is limited to
-        // meetings they organize, so the DB-side LIMIT still yields a full page.
+        permissionService.require(actor, Action.VIEW, ResourceType.MEETING, orgId, actor.getId());
         boolean orgWide = permissionService.can(actor, Action.VIEW, ResourceType.MEETING, orgId, Long.MIN_VALUE);
-        List<Meeting> all;
-        if (relatedType != null && relatedId != null) {
-            all = orgWide
-                    ? meetingRepository.findByOrganizationIdAndRelatedTypeAndRelatedIdOrderByStartAtDesc(orgId, relatedType, relatedId, page)
-                    : meetingRepository.findByOrganizationIdAndRelatedTypeAndRelatedIdAndOrganizerIdOrderByStartAtDesc(orgId, relatedType, relatedId, actor.getId(), page);
-        } else {
-            all = orgWide
-                    ? meetingRepository.findByOrganizationIdOrderByStartAtDesc(orgId, page)
-                    : meetingRepository.findByOrganizationIdAndOrganizerIdOrderByStartAtDesc(orgId, actor.getId(), page);
-        }
-        List<Meeting> filtered = all.stream()
-                .filter(m -> permissionService.can(actor, Action.VIEW, ResourceType.MEETING,
-                        m.getOrganizationId(), m.getOrganizerId()))
-                .collect(Collectors.toList());
-        return Map.of("count", filtered.size(), "data", filtered);
+        Specification<Meeting> spec = (root, query, cb) -> {
+            List<Predicate> ps = new ArrayList<>();
+            ps.add(cb.equal(root.get("organizationId"), orgId));
+            if (!orgWide) ps.add(cb.equal(root.get("organizerId"), actor.getId()));
+            if (relatedType != null && relatedId != null) {
+                ps.add(cb.equal(root.get("relatedType"), relatedType));
+                ps.add(cb.equal(root.get("relatedId"), relatedId));
+            }
+            if (status != null && !status.isBlank()) ps.add(cb.equal(root.get("status"), status));
+            if (from != null) ps.add(cb.greaterThanOrEqualTo(root.get("startAt"), from));
+            if (to != null) ps.add(cb.lessThanOrEqualTo(root.get("startAt"), to));
+            if (q != null && !q.isBlank()) {
+                ps.add(cb.like(cb.lower(root.get("title")),
+                        "%" + ProjectController.escapeLike(q.trim().toLowerCase(java.util.Locale.ROOT)) + "%", '\\'));
+            }
+            return cb.and(ps.toArray(new Predicate[0]));
+        };
+        Page<Meeting> result = meetingRepository.findAll(spec, Paging.of(page, size, limit, 100, 500,
+                Sort.by(Sort.Order.desc("startAt"), Sort.Order.desc("id"))));
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("count", result.getTotalElements());
+        out.put("data", result.getContent());
+        return out;
     }
 
     @GetMapping("/{id}")
@@ -96,6 +120,7 @@ public class MeetingController {
     }
 
     @PostMapping
+    @Transactional
     public ResponseEntity<?> create(@RequestBody Map<String, Object> raw) {
         User actor = currentUser.get();
         permissionService.require(actor, Action.CREATE, ResourceType.MEETING,
@@ -119,7 +144,7 @@ public class MeetingController {
         m.setTitle(body.getTitle());
         m.setDescription(body.getDescription());
         m.setLocation(body.getLocation());
-        m.setMeetingUrl(body.getMeetingUrl());
+        m.setMeetingUrl(UrlFields.normalize("meetingUrl", body.getMeetingUrl()));
         m.setStatus(body.getStatus() != null ? body.getStatus() : "scheduled");
         m.setStartAt(body.getStartAt());
         m.setEndAt(body.getEndAt());
@@ -145,24 +170,27 @@ public class MeetingController {
     }
 
     @PutMapping("/{id}")
+    @Transactional
     public ResponseEntity<?> update(@PathVariable Long id, @RequestBody Map<String, Object> raw) {
         Meeting existing = meetingRepository.findByIdAndOrganizationId(id, currentUser.organizationId()).orElse(null);
         if (existing == null) return ResponseEntity.notFound().build();
         permissionService.require(currentUser.get(), Action.EDIT, ResourceType.MEETING,
                 existing.getOrganizationId(), existing.getOrganizerId());
         Meeting body = bind(raw);
-        if (body.getStatus() != null && !STATUSES.contains(body.getStatus())) return badRequest("invalid status");
+        // status has a field default ("scheduled") � only an explicitly sent value counts.
+        String newStatus = raw.containsKey("status") ? body.getStatus() : null;
+        if (newStatus != null && !STATUSES.contains(newStatus)) return badRequest("invalid status");
 
         if (body.getTitle() != null && !body.getTitle().isBlank()) existing.setTitle(body.getTitle());
-        if (body.getDescription() != null) existing.setDescription(body.getDescription());
-        if (body.getLocation() != null) existing.setLocation(body.getLocation());
-        if (body.getMeetingUrl() != null) existing.setMeetingUrl(body.getMeetingUrl());
-        if (body.getStatus() != null) existing.setStatus(body.getStatus());
+        if (raw.containsKey("description")) existing.setDescription(body.getDescription());
+        if (raw.containsKey("location")) existing.setLocation(body.getLocation());
+        if (raw.containsKey("meetingUrl")) existing.setMeetingUrl(UrlFields.normalize("meetingUrl", body.getMeetingUrl()));
+        if (newStatus != null) existing.setStatus(newStatus);
         if (body.getStartAt() != null) existing.setStartAt(body.getStartAt());
-        if (body.getEndAt() != null) existing.setEndAt(body.getEndAt());
-        if (body.getDurationMinutes() != null) existing.setDurationMinutes(body.getDurationMinutes());
-        if (body.getNotes() != null) existing.setNotes(body.getNotes());
-        if (body.getOutcome() != null) existing.setOutcome(body.getOutcome());
+        if (raw.containsKey("endAt")) existing.setEndAt(body.getEndAt());
+        if (raw.containsKey("durationMinutes")) existing.setDurationMinutes(body.getDurationMinutes());
+        if (raw.containsKey("notes")) existing.setNotes(body.getNotes());
+        if (raw.containsKey("outcome")) existing.setOutcome(body.getOutcome());
         existing.setUpdatedAt(Instant.now());
         meetingRepository.save(existing);
         auditService.log("update", "meetings", id, existing.getTitle(), null, existing);
@@ -170,6 +198,7 @@ public class MeetingController {
     }
 
     @DeleteMapping("/{id}")
+    @Transactional
     public ResponseEntity<?> delete(@PathVariable Long id) {
         Meeting existing = meetingRepository.findByIdAndOrganizationId(id, currentUser.organizationId()).orElse(null);
         if (existing == null) return ResponseEntity.notFound().build();

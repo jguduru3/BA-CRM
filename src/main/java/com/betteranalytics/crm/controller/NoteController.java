@@ -9,15 +9,17 @@ import com.betteranalytics.crm.repository.*;
 import com.betteranalytics.crm.security.CurrentUser;
 import com.betteranalytics.crm.service.AuditService;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.springframework.data.domain.PageRequest;
+import com.betteranalytics.crm.service.Paging;
+import jakarta.persistence.criteria.Predicate;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.stream.Collectors;
+import java.util.*;
 
 @RestController
 @RequestMapping("/api/notes")
@@ -53,24 +55,41 @@ public class NoteController {
         this.meetingRepository = meetingRepository;
     }
 
+    /** Filtering, sorting and paging happen in the database; {@code count} is the real total. */
     @GetMapping
     public Map<String, Object> list(@RequestParam(required = false) String relatedType,
                                      @RequestParam(required = false) Long relatedId,
-                                     @RequestParam(defaultValue = "200") int limit) {
-        PageRequest page = PageRequest.of(0, Math.max(1, Math.min(limit, 500)));
-        List<Note> all;
-        if (relatedType != null && relatedId != null) {
-            all = noteRepository.findByOrganizationIdAndRelatedTypeAndRelatedIdOrderByPinnedDescCreatedAtDesc(
-                    currentUser.organizationId(), relatedType, relatedId, page);
-        } else {
-            all = noteRepository.findByOrganizationIdOrderByCreatedAtDesc(currentUser.organizationId(), page);
-        }
+                                     @RequestParam(required = false) Boolean pinned,
+                                     @RequestParam(required = false) String q,
+                                     @RequestParam(required = false) Integer limit,
+                                     @RequestParam(required = false) Integer page,
+                                     @RequestParam(required = false) Integer size) {
         User actor = currentUser.get();
-        List<Note> filtered = all.stream()
-                .filter(n -> permissionService.can(actor, Action.VIEW, ResourceType.NOTE,
-                        n.getOrganizationId(), n.getCreatedBy()))
-                .collect(Collectors.toList());
-        return Map.of("count", filtered.size(), "data", filtered);
+        Long orgId = actor.getOrganizationId();
+        permissionService.require(actor, Action.VIEW, ResourceType.NOTE, orgId, actor.getId());
+        boolean orgWide = permissionService.can(actor, Action.VIEW, ResourceType.NOTE, orgId, Long.MIN_VALUE);
+        Specification<Note> spec = (root, query, cb) -> {
+            List<Predicate> ps = new ArrayList<>();
+            ps.add(cb.equal(root.get("organizationId"), orgId));
+            if (!orgWide) ps.add(cb.equal(root.get("createdBy"), actor.getId()));
+            if (relatedType != null && relatedId != null) {
+                ps.add(cb.equal(root.get("relatedType"), relatedType));
+                ps.add(cb.equal(root.get("relatedId"), relatedId));
+            }
+            if (pinned != null) ps.add(cb.equal(root.get("pinned"), pinned));
+            if (q != null && !q.isBlank()) {
+                String like = "%" + ProjectController.escapeLike(q.trim().toLowerCase(Locale.ROOT)) + "%";
+                ps.add(cb.or(cb.like(cb.lower(root.get("title")), like, '\\'),
+                             cb.like(cb.lower(root.get("body")), like, '\\')));
+            }
+            return cb.and(ps.toArray(new Predicate[0]));
+        };
+        Page<Note> result = noteRepository.findAll(spec, Paging.of(page, size, limit, 200, 500,
+                Sort.by(Sort.Order.desc("pinned"), Sort.Order.desc("createdAt"), Sort.Order.desc("id"))));
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("count", result.getTotalElements());
+        out.put("data", result.getContent());
+        return out;
     }
 
     @GetMapping("/{id}")
@@ -83,6 +102,7 @@ public class NoteController {
     }
 
     @PostMapping
+    @Transactional
     public ResponseEntity<?> create(@RequestBody Map<String, Object> raw) {
         User actor = currentUser.get();
         permissionService.require(actor, Action.CREATE, ResourceType.NOTE,
@@ -112,13 +132,14 @@ public class NoteController {
     }
 
     @PutMapping("/{id}")
+    @Transactional
     public ResponseEntity<Note> update(@PathVariable Long id, @RequestBody Map<String, Object> raw) {
         Note existing = noteRepository.findByIdAndOrganizationId(id, currentUser.organizationId()).orElse(null);
         if (existing == null) return ResponseEntity.notFound().build();
         permissionService.require(currentUser.get(), Action.EDIT, ResourceType.NOTE,
                 existing.getOrganizationId(), existing.getCreatedBy());
         Note body = bind(raw);
-        if (body.getTitle() != null) existing.setTitle(body.getTitle());
+        if (raw.containsKey("title")) existing.setTitle(body.getTitle());
         if (body.getBody() != null && !body.getBody().isBlank()) existing.setBody(body.getBody());
         if (raw.containsKey("pinned")) existing.setPinned(body.isPinned());
         existing.setUpdatedAt(Instant.now());
@@ -128,6 +149,7 @@ public class NoteController {
     }
 
     @DeleteMapping("/{id}")
+    @Transactional
     public ResponseEntity<?> delete(@PathVariable Long id) {
         Note existing = noteRepository.findByIdAndOrganizationId(id, currentUser.organizationId()).orElse(null);
         if (existing == null) return ResponseEntity.notFound().build();

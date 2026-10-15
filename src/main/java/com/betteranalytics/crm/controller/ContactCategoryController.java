@@ -1,14 +1,18 @@
 package com.betteranalytics.crm.controller;
 
 import com.betteranalytics.crm.entity.ContactCategory;
-import com.betteranalytics.crm.entity.Role;
 import com.betteranalytics.crm.entity.User;
+import com.betteranalytics.crm.permission.Action;
+import com.betteranalytics.crm.permission.PermissionService;
+import com.betteranalytics.crm.permission.ResourceType;
 import com.betteranalytics.crm.repository.ContactCategoryRepository;
 import com.betteranalytics.crm.security.CurrentUser;
+import com.betteranalytics.crm.service.AuditService;
+import com.betteranalytics.crm.service.Paging;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.access.AccessDeniedException;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
@@ -16,12 +20,13 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * GET    /api/contact-categories           — list (auto-seeds predefined on first call)
+ * GET    /api/contact-categories           — list (auto-seeds predefined on first call; ?page=&size=)
  * POST   /api/contact-categories           — add custom category
- * PUT    /api/contact-categories/{id}      — update (custom only)
- * DELETE /api/contact-categories/{id}      — delete (custom only)
+ * PUT    /api/contact-categories/{id}      — partial update (custom only)
+ * DELETE /api/contact-categories/{id}      — delete (custom only); contacts using it are un-categorised
  *
- * Everyone can list; creating/updating/deleting categories is Manager+ only.
+ * Access: PermissionService on CONTACT_CATEGORY — everyone can list; creating,
+ * updating and deleting is Manager+ (SUPPORT is read-only).
  */
 @RestController
 @RequestMapping("/api/contact-categories")
@@ -51,25 +56,34 @@ public class ContactCategoryController {
     private final ContactCategoryRepository repo;
     private final CurrentUser currentUser;
     private final ObjectMapper objectMapper;
+    private final PermissionService permissionService;
+    private final AuditService auditService;
 
     public ContactCategoryController(ContactCategoryRepository repo, CurrentUser currentUser,
-                                     ObjectMapper objectMapper) {
+                                     ObjectMapper objectMapper, PermissionService permissionService,
+                                     AuditService auditService) {
         this.repo = repo;
         this.currentUser = currentUser;
         this.objectMapper = objectMapper;
+        this.permissionService = permissionService;
+        this.auditService = auditService;
     }
 
     @GetMapping
-    public List<ContactCategory> list() {
-        Long orgId = currentUser.organizationId();
+    public List<ContactCategory> list(@RequestParam(required = false) Integer page,
+                                      @RequestParam(required = false) Integer size) {
+        User actor = currentUser.get();
+        Long orgId = actor.getOrganizationId();
+        permissionService.require(actor, Action.VIEW, ResourceType.CONTACT_CATEGORY, orgId, actor.getId());
         if (!repo.existsByOrganizationId(orgId)) seedPredefined(orgId);
-        return repo.findByOrganizationIdOrderByIsSystemDescNameAsc(orgId);
+        return repo.findByOrganizationIdOrderByIsSystemDescNameAsc(orgId, Paging.of(page, size, 500, 500, null));
     }
 
     @PostMapping
+    @Transactional
     public ResponseEntity<?> create(@RequestBody Map<String, Object> raw) {
         User actor = currentUser.get();
-        requireManagerPlus(actor);
+        permissionService.require(actor, Action.CREATE, ResourceType.CONTACT_CATEGORY, actor.getOrganizationId(), null);
         ContactCategory body = bind(raw);
         if (body.getName() == null || body.getName().isBlank()) {
             return ResponseEntity.badRequest().body(Map.of("error", "name is required"));
@@ -91,21 +105,21 @@ public class ContactCategoryController {
         c.setActive(true);
         c.setCreatedBy(actor.getId());
         c.setCreatedAt(Instant.now());
-        try {
-            return ResponseEntity.status(201).body(repo.save(c));
-        } catch (DataIntegrityViolationException e) {
-            return ResponseEntity.status(409).body(Map.of("error", "a category with this name already exists"));
-        }
+        ContactCategory saved = repo.saveAndFlush(c);
+        auditService.log("create", "contact_categories", saved.getId(), saved.getName(), null, saved);
+        return ResponseEntity.status(201).body(saved);
     }
 
     @PutMapping("/{id}")
+    @Transactional
     public ResponseEntity<?> update(@PathVariable Long id,
                                     @RequestBody Map<String, Object> raw) {
         User actor = currentUser.get();
         ContactCategory existing = repo.findByIdAndOrganizationId(id, actor.getOrganizationId())
                 .orElse(null);
         if (existing == null) return ResponseEntity.status(404).body(Map.of("error", "category not found"));
-        requireManagerPlus(actor);
+        permissionService.require(actor, Action.EDIT, ResourceType.CONTACT_CATEGORY,
+                existing.getOrganizationId(), existing.getCreatedBy());
         if (existing.isSystem()) {
             return ResponseEntity.badRequest().body(Map.of("error", "System categories are read-only"));
         }
@@ -117,32 +131,36 @@ public class ContactCategoryController {
             }
             existing.setName(name);
         }
-        if (body.getDescription() != null) existing.setDescription(body.getDescription());
-        if (body.getColor()       != null) existing.setColor(body.getColor());
-        if (body.getIcon()        != null) existing.setIcon(body.getIcon());
-        if (body.getIndustry()    != null) existing.setIndustry(body.getIndustry());
-        if (body.getCountry()     != null) existing.setCountry(body.getCountry());
-        if (body.getState()       != null) existing.setState(body.getState());
-        if (raw.containsKey("active")) existing.setActive(body.isActive());
-        try {
-            return ResponseEntity.ok(repo.save(existing));
-        } catch (DataIntegrityViolationException e) {
-            return ResponseEntity.status(409).body(Map.of("error", "a category with this name already exists"));
-        }
+        if (raw.containsKey("description")) existing.setDescription(body.getDescription());
+        if (raw.containsKey("color"))       existing.setColor(body.getColor());
+        if (raw.containsKey("icon"))        existing.setIcon(body.getIcon());
+        if (raw.containsKey("industry"))    existing.setIndustry(body.getIndustry());
+        if (raw.containsKey("country"))     existing.setCountry(body.getCountry());
+        if (raw.containsKey("state"))       existing.setState(body.getState());
+        if (raw.containsKey("active"))      existing.setActive(body.isActive());
+        ContactCategory saved = repo.saveAndFlush(existing);
+        auditService.log("update", "contact_categories", id, saved.getName(), null, saved);
+        return ResponseEntity.ok(saved);
     }
 
     @DeleteMapping("/{id}")
+    @Transactional
     public ResponseEntity<?> delete(@PathVariable Long id) {
         User actor = currentUser.get();
         ContactCategory existing = repo.findByIdAndOrganizationId(id, actor.getOrganizationId())
                 .orElse(null);
         if (existing == null) return ResponseEntity.notFound().build();
-        requireManagerPlus(actor);
+        permissionService.require(actor, Action.DELETE, ResourceType.CONTACT_CATEGORY,
+                existing.getOrganizationId(), existing.getCreatedBy());
         if (existing.isSystem()) {
             return ResponseEntity.badRequest().body(Map.of("error", "System categories cannot be deleted"));
         }
+        // contacts.category_id has no FK — clear it so no contact points at a deleted category.
+        int cleared = repo.clearFromContacts(actor.getOrganizationId(), id);
         repo.delete(existing);
-        return ResponseEntity.ok(Map.of("ok", true));
+        auditService.log("delete", "contact_categories", id, existing.getName(), existing,
+                Map.of("contactsCleared", cleared));
+        return ResponseEntity.ok(Map.of("ok", true, "contactsCleared", cleared));
     }
 
     /**
@@ -168,12 +186,6 @@ public class ContactCategoryController {
                     // another instance seeded this row concurrently — fine
                 }
             }
-        }
-    }
-
-    private static void requireManagerPlus(User u) {
-        if (u.getRole() != Role.SUPER_ADMIN && u.getRole() != Role.VP_SALES && u.getRole() != Role.MANAGER) {
-            throw new AccessDeniedException("only managers and above can manage contact categories");
         }
     }
 
