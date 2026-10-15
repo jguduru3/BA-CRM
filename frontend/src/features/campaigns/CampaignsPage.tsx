@@ -1,276 +1,226 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { LucideIcon } from "lucide-react";
-import { Megaphone, Pause, Play, Plus, Send, Trash2, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Megaphone, Plus } from "lucide-react";
+import { useMemo, useState } from "react";
 import { api } from "@/lib/api";
+import { useAuthStore } from "@/lib/auth";
 import { formatDateTime } from "@/lib/format";
 import { toast } from "@/lib/toast";
-import type { Campaign } from "@/lib/types";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { StageBadge } from "@/components/ui/Badge";
 import { Column, DataTable } from "@/components/ui/DataTable";
 import { Drawer } from "@/components/ui/Drawer";
-import { Field, FieldGrid } from "@/components/ui/Field";
-import { useConfirm } from "@/components/ui/ConfirmDialog";
+import { QueryError } from "@/components/ui/QueryError";
+import { Tabs } from "@/components/ui/Tabs";
+import { CampaignDetailDrawer } from "./CampaignDetailDrawer";
+import { CampaignForm, type CampaignDraft, validateTemplateParams } from "./CampaignForm";
+import { type CampaignRow, type CampaignStatus, normalizeStatus, STATUS_LABEL, STATUS_TONE } from "./campaignTypes";
 
-interface CampaignRow extends Campaign {
-  type: string;
-  templateName?: string;
-  messageBody?: string;
-  scheduledAt?: string | null;
-  totalContacts: number;
-  sentCount: number;
-  failedCount: number;
-  rejectionReason?: string | null;
-  createdAt: string;
-}
-interface WaAccount {
-  id: number;
-  displayPhoneNumber: string;
-}
-
-const ACTIONS: Record<string, { key: string; label: string; icon: LucideIcon; danger?: boolean }[]> = {
-  draft: [
-    { key: "submit", label: "Submit for approval", icon: Send },
-    { key: "launch", label: "Launch now", icon: Play },
-  ],
-  pending_approval: [
-    { key: "approve", label: "Approve", icon: Play },
-    { key: "reject", label: "Reject", icon: X, danger: true },
-  ],
-  approved: [{ key: "launch", label: "Launch", icon: Play }],
-  scheduled: [{ key: "cancel", label: "Cancel", icon: X, danger: true }],
-  running: [
-    { key: "pause", label: "Pause", icon: Pause },
-    { key: "cancel", label: "Cancel", icon: X, danger: true },
-  ],
-  paused: [
-    { key: "resume", label: "Resume", icon: Play },
-    { key: "cancel", label: "Cancel", icon: X, danger: true },
-  ],
+type Filter = "all" | "review" | "active" | "done";
+const FILTERS: Record<Filter, CampaignStatus[] | null> = {
+  all: null,
+  review: ["draft", "submitted", "rejected", "approved"],
+  active: ["scheduled", "sending", "paused"],
+  done: ["completed", "cancelled"],
 };
+const EMPTY_DRAFT: CampaignDraft = { type: "whatsapp", templateLanguage: "en_US" };
+
+function RowProgress({ r }: { r: CampaignRow }) {
+  const total = r.totalContacts || 0;
+  const done = Math.min(total, (r.sentCount ?? 0) + (r.failedCount ?? 0));
+  const pct = total === 0 ? 0 : Math.round((done / total) * 100);
+  const status = normalizeStatus(r.status);
+  if (total === 0) return <span className="text-xs" style={{ color: "var(--ink-muted)" }}>No recipients</span>;
+  return (
+    <div className="min-w-[8rem]">
+      <div className="flex justify-between text-[11px] mb-1" style={{ color: "var(--ink-muted)" }}>
+        <span className="tabular-nums">
+          {done}/{total}
+        </span>
+        <span className="tabular-nums">{pct}%</span>
+      </div>
+      <div className="h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: "rgb(var(--panel-border) / 0.12)" }}>
+        <div
+          className="h-full rounded-full transition-[width] duration-700"
+          style={{
+            width: `${pct}%`,
+            backgroundImage: status === "sending" ? "var(--brand-gradient)" : undefined,
+            backgroundColor: status === "sending" ? undefined : status === "completed" ? "var(--good)" : "var(--ink-muted)",
+          }}
+        />
+      </div>
+    </div>
+  );
+}
 
 export default function CampaignsPage() {
-  const [selected, setSelected] = useState<CampaignRow | null>(null);
+  const user = useAuthStore((s) => s.user);
+  const canManage = user?.role === "SUPER_ADMIN" || user?.role === "VP_SALES";
+  const [filter, setFilter] = useState<Filter>("all");
+  const [selectedId, setSelectedId] = useState<number | null>(null);
   const [creating, setCreating] = useState(false);
-  const [draft, setDraft] = useState<Partial<CampaignRow>>({ type: "whatsapp" });
-  const [recipients, setRecipients] = useState("");
+  const [draft, setDraft] = useState<CampaignDraft>(EMPTY_DRAFT);
   const qc = useQueryClient();
-  const { confirm, node: confirmNode } = useConfirm();
 
   const list = useQuery({
-    queryKey: ["campaigns"],
-    queryFn: async () => (await api.get<CampaignRow[]>("/campaigns")).data,
-  });
-  const accounts = useQuery({
-    queryKey: ["whatsapp", "accounts"],
-    queryFn: async () => (await api.get<WaAccount[]>("/whatsapp/accounts")).data,
-    retry: 0,
+    queryKey: ["campaigns", "list"],
+    queryFn: async () => (await api.get<CampaignRow[]>("/campaigns", { params: { limit: 200 } })).data,
+    // Keep counters moving while anything is sending.
+    refetchInterval: (q) => (q.state.data?.some((c) => normalizeStatus(c.status) === "sending") ? 10_000 : false),
   });
 
-  useEffect(() => {
-    if (!creating) setDraft({ type: "whatsapp" });
-  }, [creating]);
+  const rows = useMemo(() => {
+    const all = (list.data ?? []).map((c) => ({ ...c, status: normalizeStatus(c.status) }));
+    const allowed = FILTERS[filter];
+    return allowed ? all.filter((c) => allowed.includes(c.status)) : all;
+  }, [list.data, filter]);
+  const counts = useMemo(() => {
+    const all = (list.data ?? []).map((c) => normalizeStatus(c.status));
+    const n = (f: Filter) => (FILTERS[f] ? all.filter((s) => FILTERS[f]!.includes(s)).length : all.length);
+    return { all: n("all"), review: n("review"), active: n("active"), done: n("done") };
+  }, [list.data]);
 
   const create = useMutation({
     mutationFn: async () => (await api.post<CampaignRow>("/campaigns", draft)).data,
-    onSuccess: () => {
-      toast.success("Campaign drafted");
+    onSuccess: (c) => {
+      toast.success("Draft created — add recipients next");
       qc.invalidateQueries({ queryKey: ["campaigns"] });
       setCreating(false);
-    },
-    onError: (e: Error) => toast.error(e.message),
-  });
-
-  const action = useMutation({
-    mutationFn: async ({ id, key }: { id: number; key: string }) => api.post(`/campaigns/${id}/${key}`),
-    onSuccess: () => {
-      toast.success("Campaign updated");
-      qc.invalidateQueries({ queryKey: ["campaigns"] });
-    },
-    onError: (e: Error) => toast.error(e.message),
-  });
-
-  const remove = useMutation({
-    mutationFn: async (id: number) => api.delete(`/campaigns/${id}`),
-    onSuccess: () => {
-      toast.success("Campaign deleted");
-      qc.invalidateQueries({ queryKey: ["campaigns"] });
-      setSelected(null);
-    },
-    onError: (e: Error) => toast.error(e.message),
-  });
-
-  const addRecipients = useMutation({
-    mutationFn: async () => {
-      const entries = recipients
-        .split("\n")
-        .map((l) => l.trim())
-        .filter(Boolean)
-        .map((phoneNumber) => ({ phoneNumber }));
-      return api.post(`/campaigns/${selected!.id}/contacts`, entries);
-    },
-    onSuccess: () => {
-      toast.success("Recipients added");
-      qc.invalidateQueries({ queryKey: ["campaigns"] });
-      setRecipients("");
+      setDraft(EMPTY_DRAFT);
+      setSelectedId(c.id);
     },
     onError: (e: Error) => toast.error(e.message),
   });
 
   const columns: Column<CampaignRow>[] = [
-    { key: "name", header: "Campaign", sortValue: (r) => r.name, render: (r) => <span className="text-sm font-medium">{r.name}</span> },
-    { key: "status", header: "Status", sortValue: (r) => r.status, render: (r) => <StageBadge value={r.status.replace("_", " ")} /> },
-    { key: "channel", header: "Channel", render: (r) => <span className="text-sm capitalize">{r.type}</span> },
-    { key: "totalContacts", header: "Recipients", align: "right", sortValue: (r) => r.totalContacts, render: (r) => <span className="tabular-nums text-sm">{r.totalContacts}</span> },
-    { key: "sentCount", header: "Sent", align: "right", sortValue: (r) => r.sentCount, render: (r) => <span className="tabular-nums text-sm" style={{ color: "var(--good)" }}>{r.sentCount}</span> },
-    { key: "failedCount", header: "Failed", align: "right", sortValue: (r) => r.failedCount, render: (r) => <span className="tabular-nums text-sm" style={{ color: r.failedCount ? "var(--critical)" : "var(--ink-muted)" }}>{r.failedCount}</span> },
-    { key: "createdAt", header: "Created", sortValue: (r) => r.createdAt, render: (r) => <span className="text-sm">{formatDateTime(r.createdAt)}</span> },
+    {
+      key: "name",
+      header: "Campaign",
+      sortValue: (r) => r.name,
+      render: (r) => (
+        <div className="min-w-0">
+          <p className="text-sm font-medium truncate" style={{ color: "var(--ink-primary)" }}>
+            {r.name}
+          </p>
+          <p className="text-[11px] capitalize" style={{ color: "var(--ink-muted)" }}>
+            {r.type}
+            {r.templateName ? ` · ${r.templateName}` : ""}
+          </p>
+        </div>
+      ),
+    },
+    {
+      key: "status",
+      header: "Status",
+      sortValue: (r) => r.status,
+      render: (r) => {
+        const s = normalizeStatus(r.status);
+        return (
+          <span className={`${STATUS_TONE[s]} inline-flex items-center gap-1`}>
+            {s === "sending" && <span className="h-1.5 w-1.5 rounded-full animate-pulse" style={{ backgroundColor: "currentColor" }} />}
+            {STATUS_LABEL[s]}
+          </span>
+        );
+      },
+    },
+    { key: "progress", header: "Progress", render: (r) => <RowProgress r={r} /> },
+    {
+      key: "delivered",
+      header: "Delivered",
+      align: "right",
+      sortValue: (r) => r.deliveredCount,
+      render: (r) => (
+        <span className="tabular-nums text-sm" style={{ color: "var(--good)" }}>
+          {r.deliveredCount ?? 0}
+        </span>
+      ),
+    },
+    {
+      key: "failed",
+      header: "Failed",
+      align: "right",
+      sortValue: (r) => r.failedCount,
+      render: (r) => (
+        <span className="tabular-nums text-sm" style={{ color: r.failedCount ? "var(--critical)" : "var(--ink-muted)" }}>
+          {r.failedCount ?? 0}
+        </span>
+      ),
+    },
+    {
+      key: "createdAt",
+      header: "Created",
+      sortValue: (r) => r.createdAt,
+      render: (r) => <span className="text-sm whitespace-nowrap">{formatDateTime(r.createdAt)}</span>,
+    },
   ];
 
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
         title="Campaigns"
-        description={`${list.data?.length ?? 0} campaigns · Draft → Approval → Scheduled → Sending → Completed`}
+        description="Draft → approval → scheduled → sending → completed, with live delivery tracking."
         icon={<Megaphone size={20} />}
         actions={
-          <button className="btn-primary" onClick={() => setCreating(true)}>
-            <Plus size={15} /> New campaign
-          </button>
+          canManage ? (
+            <button className="btn-primary" onClick={() => setCreating(true)}>
+              <Plus size={15} /> New campaign
+            </button>
+          ) : undefined
         }
       />
 
-      <DataTable columns={columns} rows={list.data ?? []} loading={list.isLoading} onRowClick={setSelected} emptyTitle="No campaigns yet" />
+      <div className="overflow-x-auto thin-scroll -mx-1 px-1">
+        <Tabs
+          value={filter}
+          onChange={setFilter}
+          tabs={[
+            { value: "all", label: "All", count: counts.all },
+            { value: "review", label: "In review", count: counts.review },
+            { value: "active", label: "Active", count: counts.active },
+            { value: "done", label: "Finished", count: counts.done },
+          ]}
+        />
+      </div>
 
-      <Drawer open={!!selected} onClose={() => setSelected(null)} title={selected?.name ?? ""} subtitle={selected && <StageBadge value={selected.status.replace("_", " ")} />}>
-        {selected && (
-          <div className="space-y-5">
-            {selected.rejectionReason && (
-              <div className="rounded-lg px-3 py-2.5 text-sm" style={{ backgroundColor: "rgb(208 59 59 / 0.1)", color: "var(--critical)" }}>
-                Rejected: {selected.rejectionReason}
-              </div>
-            )}
-            <div className="grid grid-cols-3 gap-3 text-center">
-              <div className="glass-solid rounded-xl p-3">
-                <p className="text-lg font-bold tabular-nums">{selected.totalContacts}</p>
-                <p className="text-xs" style={{ color: "var(--ink-muted)" }}>Total</p>
-              </div>
-              <div className="glass-solid rounded-xl p-3">
-                <p className="text-lg font-bold tabular-nums" style={{ color: "var(--good)" }}>{selected.sentCount}</p>
-                <p className="text-xs" style={{ color: "var(--ink-muted)" }}>Sent</p>
-              </div>
-              <div className="glass-solid rounded-xl p-3">
-                <p className="text-lg font-bold tabular-nums" style={{ color: "var(--critical)" }}>{selected.failedCount}</p>
-                <p className="text-xs" style={{ color: "var(--ink-muted)" }}>Failed</p>
-              </div>
-            </div>
+      {list.isError ? (
+        <div className="glass-card">
+          <QueryError error={list.error} onRetry={() => list.refetch()} title="Couldn't load campaigns" />
+        </div>
+      ) : (
+        <DataTable
+          columns={columns}
+          rows={rows}
+          loading={list.isLoading}
+          onRowClick={(r) => setSelectedId(r.id)}
+          emptyTitle={filter === "all" ? "No campaigns yet" : "Nothing in this view"}
+          emptyDescription={canManage ? "Create a WhatsApp campaign, pick an approved template and build its audience." : undefined}
+          emptyAction={
+            canManage && filter === "all" ? (
+              <button className="btn-primary" onClick={() => setCreating(true)}>
+                <Plus size={15} /> New campaign
+              </button>
+            ) : undefined
+          }
+        />
+      )}
 
-            <div className="flex flex-wrap gap-2">
-              {(ACTIONS[selected.status] ?? []).map((a) => (
-                <button
-                  key={a.key}
-                  className={a.danger ? "btn-danger" : "btn-secondary"}
-                  onClick={() => action.mutate({ id: selected.id, key: a.key })}
-                >
-                  <a.icon size={14} /> {a.label}
-                </button>
-              ))}
-              {selected.status === "draft" && (
-                <button
-                  className="btn-ghost"
-                  style={{ color: "var(--critical)" }}
-                  onClick={async () => {
-                    const ok = await confirm("Delete this campaign?", `"${selected.name}" will be permanently deleted.`);
-                    if (ok) remove.mutate(selected.id);
-                  }}
-                >
-                  <Trash2 size={14} /> Delete
-                </button>
-              )}
-            </div>
+      <CampaignDetailDrawer campaignId={selectedId} onClose={() => setSelectedId(null)} />
 
-            {selected.messageBody && (
-              <div>
-                <p className="field-label">Message</p>
-                <p className="text-sm whitespace-pre-wrap p-3 rounded-lg glass-solid" style={{ color: "var(--ink-secondary)" }}>
-                  {selected.messageBody}
-                </p>
-              </div>
-            )}
-
-            {selected.status === "draft" && (
-              <div>
-                <p className="field-label">Add recipients (one phone number per line, E.164)</p>
-                <textarea className="textarea" rows={5} value={recipients} onChange={(e) => setRecipients(e.target.value)} placeholder={"+91XXXXXXXXXX\n+91XXXXXXXXXX"} />
-                <button className="btn-secondary mt-2" disabled={!recipients.trim()} onClick={() => addRecipients.mutate()}>
-                  <Plus size={14} /> Add recipients
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-      </Drawer>
-
-      <Drawer open={creating} onClose={() => setCreating(false)} title="New campaign">
-        <div className="space-y-4">
-          <Field label="Name" required>
-            <input className="input" value={draft.name ?? ""} onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))} />
-          </Field>
-          <FieldGrid>
-            <Field label="Channel">
-              <select className="select" value={draft.type ?? "whatsapp"} onChange={(e) => setDraft((d) => ({ ...d, type: e.target.value }))}>
-                <option value="whatsapp">WhatsApp</option>
-                <option value="email">Email (not yet dispatched)</option>
-              </select>
-            </Field>
-            <Field label="WhatsApp account" hint={accounts.isError ? "No accounts configured" : undefined}>
-              <select
-                className="select"
-                value={(draft as Partial<CampaignRow> & { waAccountId?: number }).waAccountId ?? ""}
-                onChange={(e) => setDraft((d) => ({ ...d, waAccountId: e.target.value ? Number(e.target.value) : undefined }))}
-              >
-                <option value="">— Default —</option>
-                {accounts.data?.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.displayPhoneNumber}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Template name" hint="Must be an approved WhatsApp template" className="sm:col-span-2">
-              <input
-                className="input"
-                value={(draft as Partial<CampaignRow> & { waAccountId?: number }).templateName ?? ""}
-                onChange={(e) => setDraft((d) => ({ ...d, templateName: e.target.value }))}
-              />
-            </Field>
-            <Field label="Scheduled for (optional)" className="sm:col-span-2">
-              <input
-                className="input"
-                type="datetime-local"
-                onChange={(e) => setDraft((d) => ({ ...d, scheduledAt: e.target.value ? new Date(e.target.value).toISOString() : undefined }))}
-              />
-            </Field>
-          </FieldGrid>
-          <Field label="Message preview / notes">
-            <textarea
-              className="textarea"
-              value={(draft as Partial<CampaignRow> & { waAccountId?: number }).messageBody ?? ""}
-              onChange={(e) => setDraft((d) => ({ ...d, messageBody: e.target.value }))}
-            />
-          </Field>
+      <Drawer open={creating} onClose={() => setCreating(false)} title="New campaign" subtitle="Saved as a draft — nothing is sent yet" width="34rem">
+        <div className="space-y-5">
+          <CampaignForm value={draft} onChange={setDraft} isNew />
           <div className="flex items-center justify-end gap-2 pt-4 hairline border-t">
             <button className="btn-ghost" onClick={() => setCreating(false)}>
               Cancel
             </button>
-            <button className="btn-primary" disabled={!draft.name} onClick={() => create.mutate()}>
-              Create draft
+            <button
+              className="btn-primary"
+              disabled={!draft.name?.trim() || !!validateTemplateParams(draft.templateParams) || create.isPending}
+              onClick={() => create.mutate()}
+            >
+              {create.isPending ? "Creating…" : "Create draft"}
             </button>
           </div>
         </div>
       </Drawer>
-      {confirmNode}
     </div>
   );
 }

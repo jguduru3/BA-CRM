@@ -16,7 +16,8 @@ interface AiJob {
 }
 interface WaAccount {
   id: number;
-  displayPhoneNumber: string;
+  displayPhoneNumber: string | null;
+  active: boolean;
 }
 
 const ACTIONS = [
@@ -66,9 +67,22 @@ export function AiAssistPanel({ lead }: { lead: Lead }) {
   const send = useMutation({
     mutationFn: async () => {
       const text = String(result?.message ?? result?.output ?? "");
-      return api.post("/whatsapp/send", { accountId: waAccountId, phone, type: "text", text, relatedType: "Lead", relatedId: lead.id });
+      return (
+        await api.post<{ status: string; errorMessage?: string | null }>("/whatsapp/send", {
+          accountId: waAccountId,
+          phone,
+          type: "text",
+          text,
+          relatedType: "Lead",
+          relatedId: lead.id,
+        })
+      ).data;
     },
-    onSuccess: () => {
+    onSuccess: (m) => {
+      if (m.status === "failed") {
+        toast.error(m.errorMessage ?? "WhatsApp did not accept the message");
+        return;
+      }
       toast.success("Message sent via WhatsApp");
       setSendOpen(false);
     },
@@ -153,15 +167,17 @@ export function AiAssistPanel({ lead }: { lead: Lead }) {
             <label className="field-label">WhatsApp account</label>
             <select className="select" value={waAccountId} onChange={(e) => setWaAccountId(e.target.value ? Number(e.target.value) : "")}>
               <option value="">— Select —</option>
-              {accounts.data?.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.displayPhoneNumber}
-                </option>
-              ))}
+              {accounts.data
+                ?.filter((a) => a.active)
+                .map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.displayPhoneNumber ?? `Sender #${a.id}`}
+                  </option>
+                ))}
             </select>
-            {accounts.isError && (
+            {(accounts.isError || (accounts.data && !accounts.data.some((a) => a.active))) && (
               <p className="text-xs mt-1" style={{ color: "var(--critical)" }}>
-                No WhatsApp account configured yet — set one up under WhatsApp → Accounts.
+                {accounts.isError ? accounts.error.message : "No active WhatsApp sender — an admin can connect one under WhatsApp → Sender numbers."}
               </p>
             )}
           </div>

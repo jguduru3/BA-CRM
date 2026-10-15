@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, Building2, KeyRound, LogOut, Settings as SettingsIcon, User as UserIcon } from "lucide-react";
+import { Building2, KeyRound, LogOut, Settings as SettingsIcon, User as UserIcon } from "lucide-react";
 import { passwordChecks, PasswordRules } from "@/features/auth/passwordRules";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
@@ -10,13 +10,7 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { Avatar } from "@/components/ui/Avatar";
 import { Field, FieldGrid } from "@/components/ui/Field";
 import { Tabs } from "@/components/ui/Tabs";
-
-interface AiSettings {
-  aiEnabled: boolean;
-  aiProvider: string;
-  aiModel: string;
-  aiKeySet: boolean;
-}
+import { AiSettingsTab } from "./AiSettingsTab";
 
 export default function SettingsPage() {
   const [tab, setTab] = useState<"profile" | "ai" | "organization">("profile");
@@ -61,50 +55,6 @@ export default function SettingsPage() {
       useAuthStore.getState().logout();
     },
     onError: (e: Error) => toast.error(e.message),
-  });
-
-  // ── AI settings ──────────────────────────────────────────────────────────
-  const aiSettings = useQuery({
-    queryKey: ["settings", "ai"],
-    queryFn: async () => (await api.get<AiSettings>("/settings/ai")).data,
-    enabled: isAdmin,
-  });
-  const [aiDraft, setAiDraft] = useState<{ aiEnabled: boolean; aiProvider: string; aiModel: string; aiApiKey: string }>({
-    aiEnabled: false,
-    aiProvider: "anthropic",
-    aiModel: "claude-sonnet-5-5",
-    aiApiKey: "",
-  });
-  useEffect(() => {
-    if (aiSettings.data) {
-      setAiDraft((d) => ({ ...d, aiEnabled: aiSettings.data.aiEnabled, aiProvider: aiSettings.data.aiProvider, aiModel: aiSettings.data.aiModel }));
-    }
-  }, [aiSettings.data]);
-
-  const saveAi = useMutation({
-    mutationFn: async () => {
-      const payload: Record<string, unknown> = {
-        aiEnabled: aiDraft.aiEnabled,
-        aiProvider: aiDraft.aiProvider,
-        aiModel: aiDraft.aiModel,
-      };
-      if (aiDraft.aiApiKey.trim()) payload.aiApiKey = aiDraft.aiApiKey.trim();
-      return (await api.put<AiSettings>("/settings/ai", payload)).data;
-    },
-    onSuccess: () => {
-      toast.success("AI settings saved");
-      qc.invalidateQueries({ queryKey: ["settings", "ai"] });
-      setAiDraft((d) => ({ ...d, aiApiKey: "" }));
-    },
-    onError: (e: Error) => toast.error(e.message),
-  });
-
-  const clearAiKey = useMutation({
-    mutationFn: async () => api.delete("/settings/ai/key"),
-    onSuccess: () => {
-      toast.success("API key cleared");
-      qc.invalidateQueries({ queryKey: ["settings", "ai"] });
-    },
   });
 
   // ── Organization ─────────────────────────────────────────────────────────
@@ -198,61 +148,7 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {tab === "ai" && isAdmin && (
-        <div className="glass-card p-5 space-y-5">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Bot size={16} style={{ color: "var(--brand-600)" }} />
-              <span className="text-sm font-semibold" style={{ color: "var(--ink-primary)" }}>
-                AI Assistant
-              </span>
-            </div>
-            <label className="inline-flex items-center gap-2 text-sm">
-              <input type="checkbox" className="checkbox" checked={aiDraft.aiEnabled} onChange={(e) => setAiDraft((d) => ({ ...d, aiEnabled: e.target.checked }))} />
-              Enabled
-            </label>
-          </div>
-          <p className="text-xs" style={{ color: "var(--ink-muted)" }}>
-            Powers lead scoring, message drafting, summaries and next-best-action suggestions from the lead detail panel, and
-            automations configured under AI Automations. Your API key is never shown again after saving.
-          </p>
-          <FieldGrid>
-            <Field label="Provider">
-              <select className="select" value={aiDraft.aiProvider} onChange={(e) => setAiDraft((d) => ({ ...d, aiProvider: e.target.value }))}>
-                <option value="anthropic">Anthropic (Claude)</option>
-                <option value="openai">OpenAI (GPT)</option>
-              </select>
-            </Field>
-            <Field label="Model">
-              <input className="input" value={aiDraft.aiModel} onChange={(e) => setAiDraft((d) => ({ ...d, aiModel: e.target.value }))} />
-            </Field>
-          </FieldGrid>
-          <Field
-            label="API key"
-            hint={aiSettings.data?.aiKeySet ? "A key is currently saved — enter a new one only to replace it." : "No key saved yet."}
-          >
-            <input
-              className="input"
-              type="password"
-              placeholder={aiSettings.data?.aiKeySet ? "••••••••••••••••" : "sk-ant-… or sk-…"}
-              value={aiDraft.aiApiKey}
-              onChange={(e) => setAiDraft((d) => ({ ...d, aiApiKey: e.target.value }))}
-            />
-          </Field>
-          <div className="flex justify-between">
-            {aiSettings.data?.aiKeySet ? (
-              <button className="btn-ghost" style={{ color: "var(--critical)" }} onClick={() => clearAiKey.mutate()}>
-                Clear saved key
-              </button>
-            ) : (
-              <span />
-            )}
-            <button className="btn-primary" onClick={() => saveAi.mutate()}>
-              Save AI settings
-            </button>
-          </div>
-        </div>
-      )}
+      {tab === "ai" && isAdmin && <AiSettingsTab />}
 
       {tab === "organization" && isAdmin && (
         <div className="glass-card p-5 space-y-5">
