@@ -1,6 +1,9 @@
 package com.betteranalytics.crm.controller;
 
 import com.betteranalytics.crm.entity.*;
+import com.betteranalytics.crm.permission.Action;
+import com.betteranalytics.crm.permission.PermissionService;
+import com.betteranalytics.crm.permission.ResourceType;
 import com.betteranalytics.crm.repository.ApiKeyRepository;
 import com.betteranalytics.crm.repository.UserRepository;
 import com.betteranalytics.crm.repository.WebhookDeliveryRepository;
@@ -12,7 +15,6 @@ import com.betteranalytics.crm.service.AuditService;
 import com.betteranalytics.crm.service.WebhookService;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.annotation.*;
 
 import java.security.SecureRandom;
@@ -41,10 +43,12 @@ public class IntegrationController {
     private final WebhookService webhookService;
     private final AuditService auditService;
     private final CurrentUser currentUser;
+    private final PermissionService permissionService;
 
     public IntegrationController(ApiKeyRepository apiKeyRepository, WebhookSubscriptionRepository webhookRepository,
                                  WebhookDeliveryRepository deliveryRepository, UserRepository userRepository,
-                                 WebhookService webhookService, AuditService auditService, CurrentUser currentUser) {
+                                 WebhookService webhookService, AuditService auditService, CurrentUser currentUser,
+                                 PermissionService permissionService) {
         this.apiKeyRepository = apiKeyRepository;
         this.webhookRepository = webhookRepository;
         this.deliveryRepository = deliveryRepository;
@@ -52,6 +56,7 @@ public class IntegrationController {
         this.webhookService = webhookService;
         this.auditService = auditService;
         this.currentUser = currentUser;
+        this.permissionService = permissionService;
     }
 
     /** Overview used by the Integrations screen. */
@@ -268,11 +273,10 @@ public class IntegrationController {
                 .orElseThrow(() -> new NoSuchElementException("webhook not found"));
     }
 
+    /** INTEGRATION rules (FeaturePermissionTable): Super Admin only, for every action. */
     private User requireAdmin() {
         User actor = currentUser.get();
-        if (actor.getRole() != Role.SUPER_ADMIN) {
-            throw new AccessDeniedException("only Super Admin can manage API keys and webhooks");
-        }
+        permissionService.require(actor, Action.EDIT, ResourceType.INTEGRATION, actor.getOrganizationId(), null);
         return actor;
     }
 

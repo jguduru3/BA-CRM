@@ -2,10 +2,12 @@ package com.betteranalytics.crm.controller;
 
 import com.betteranalytics.crm.dto.TeamMemberRequest;
 import com.betteranalytics.crm.dto.TeamRequest;
-import com.betteranalytics.crm.entity.Role;
 import com.betteranalytics.crm.entity.Team;
 import com.betteranalytics.crm.entity.TeamMember;
 import com.betteranalytics.crm.entity.User;
+import com.betteranalytics.crm.permission.Action;
+import com.betteranalytics.crm.permission.PermissionService;
+import com.betteranalytics.crm.permission.ResourceType;
 import com.betteranalytics.crm.repository.DelegationRepository;
 import com.betteranalytics.crm.repository.TeamMemberRepository;
 import com.betteranalytics.crm.repository.TeamRepository;
@@ -14,7 +16,6 @@ import com.betteranalytics.crm.security.CurrentUser;
 import com.betteranalytics.crm.service.AuditService;
 import com.betteranalytics.crm.service.TenantGuard;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
@@ -33,10 +34,12 @@ public class TeamController {
     private final CurrentUser currentUser;
     private final AuditService auditService;
     private final TenantGuard tenantGuard;
+    private final PermissionService permissionService;
 
     public TeamController(TeamRepository teamRepository, TeamMemberRepository teamMemberRepository,
                            UserRepository userRepository, DelegationRepository delegationRepository,
-                           CurrentUser currentUser, AuditService auditService, TenantGuard tenantGuard) {
+                           CurrentUser currentUser, AuditService auditService, TenantGuard tenantGuard,
+                           PermissionService permissionService) {
         this.teamRepository = teamRepository;
         this.teamMemberRepository = teamMemberRepository;
         this.userRepository = userRepository;
@@ -44,10 +47,12 @@ public class TeamController {
         this.currentUser = currentUser;
         this.auditService = auditService;
         this.tenantGuard = tenantGuard;
+        this.permissionService = permissionService;
     }
 
     @GetMapping
     public List<Map<String, Object>> list() {
+        require(Action.VIEW, null);
         List<Team> teams = teamRepository.findByOrganizationId(currentUser.organizationId());
         if (teams.isEmpty()) return List.of();
 
@@ -68,12 +73,13 @@ public class TeamController {
 
     @GetMapping("/{id}")
     public ResponseEntity<Map<String, Object>> get(@PathVariable Long id) {
+        require(Action.VIEW, null);
         return find(id).map(t -> ResponseEntity.ok(withMembers(t))).orElseThrow(() -> new NoSuchElementException("team not found"));
     }
 
     @PostMapping
     public ResponseEntity<?> create(@RequestBody TeamRequest req) {
-        requireRosterAdmin();
+        require(Action.CREATE, null);
         if (req.name == null || req.name.isBlank()) {
             return ResponseEntity.badRequest().body(Map.of("error", "name is required"));
         }
@@ -96,9 +102,9 @@ public class TeamController {
 
     @PutMapping("/{id}")
     public ResponseEntity<?> update(@PathVariable Long id, @RequestBody TeamRequest req) {
-        requireRosterAdmin();
         Team existing = find(id).orElse(null);
         if (existing == null) throw new NoSuchElementException("team not found");
+        require(Action.EDIT, existing.getLeaderId());
         if (req.name != null && req.name.isBlank()) {
             return ResponseEntity.badRequest().body(Map.of("error", "name cannot be blank"));
         }
@@ -120,9 +126,9 @@ public class TeamController {
 
     @DeleteMapping("/{id}")
     public ResponseEntity<?> delete(@PathVariable Long id) {
-        requireRosterAdmin();
         Team existing = find(id).orElse(null);
         if (existing == null) throw new NoSuchElementException("team not found");
+        require(Action.DELETE, existing.getLeaderId());
         // A current/future delegation scoped to this team would silently lose
         // its meaning (or, if the id were ever reused, point at another team).
         if (delegationRepository.existsByOrganizationIdAndTeamIdAndEndDateGreaterThanEqual(
@@ -141,6 +147,7 @@ public class TeamController {
 
     @GetMapping("/{id}/members")
     public ResponseEntity<?> members(@PathVariable Long id) {
+        require(Action.VIEW, null);
         Team team = find(id).orElse(null);
         if (team == null) throw new NoSuchElementException("team not found");
         return ResponseEntity.ok(memberDetails(id));
@@ -148,9 +155,9 @@ public class TeamController {
 
     @PostMapping("/{id}/members")
     public ResponseEntity<?> addMember(@PathVariable Long id, @RequestBody TeamMemberRequest req) {
-        requireRosterAdmin();
         Team team = find(id).orElse(null);
         if (team == null) throw new NoSuchElementException("team not found");
+        require(Action.EDIT, team.getLeaderId());
         if (req.userId == null) return ResponseEntity.badRequest().body(Map.of("error", "userId is required"));
 
         // the user being added must belong to the same org — no cross-tenant membership
@@ -174,9 +181,9 @@ public class TeamController {
 
     @DeleteMapping("/{id}/members/{userId}")
     public ResponseEntity<?> removeMember(@PathVariable Long id, @PathVariable Long userId) {
-        requireRosterAdmin();
         Team team = find(id).orElse(null);
         if (team == null) throw new NoSuchElementException("team not found");
+        require(Action.EDIT, team.getLeaderId());
         TeamMember member = teamMemberRepository.findByTeamIdAndUserId(id, userId).orElse(null);
         if (member == null) throw new NoSuchElementException("team not found");
         teamMemberRepository.delete(member);
@@ -190,13 +197,14 @@ public class TeamController {
      * Team rosters and leaders feed directly into PermissionService's TEAM scope,
      * so editing them is a privilege escalation path: a Manager who could add
      * people to their own team (or make themselves leader of another) would
-     * widen their own data access. Only SUPER_ADMIN / VP_SALES may change them (H1).
+     * widen their own data access. The TEAM rules in FeaturePermissionTable
+     * therefore let Manager+ view rosters but only VP Sales / Super Admin
+     * change them (H1). Unknown ids are resolved (404) before the check so
+     * another tenant's ids are indistinguishable from missing ones.
      */
-    private void requireRosterAdmin() {
-        Role r = currentUser.get().getRole();
-        if (r != Role.SUPER_ADMIN && r != Role.VP_SALES) {
-            throw new AccessDeniedException("only Super Admin or VP Sales can manage teams");
-        }
+    private void require(Action action, Long leaderId) {
+        User actor = currentUser.get();
+        permissionService.require(actor, action, ResourceType.TEAM, actor.getOrganizationId(), leaderId);
     }
 
     private Optional<Team> find(Long id) {

@@ -45,14 +45,18 @@ public class DepartmentController {
 
     @GetMapping
     public List<Department> list() {
+        User actor = currentUser.get();
+        permissionService.require(actor, Action.VIEW, ResourceType.DEPARTMENT, actor.getOrganizationId(), null);
         return departmentRepository.findByOrganizationId(currentUser.organizationId());
     }
 
     @GetMapping("/{id}")
     public ResponseEntity<Department> get(@PathVariable Long id) {
-        return departmentRepository.findByIdAndOrganizationId(id, currentUser.organizationId())
-                .map(ResponseEntity::ok)
+        User actor = currentUser.get();
+        Department dept = departmentRepository.findByIdAndOrganizationId(id, actor.getOrganizationId())
                 .orElseThrow(() -> new NoSuchElementException("department not found"));
+        permissionService.require(actor, Action.VIEW, ResourceType.DEPARTMENT, dept.getOrganizationId(), dept.getHeadId());
+        return ResponseEntity.ok(dept);
     }
 
     @PostMapping
@@ -81,10 +85,10 @@ public class DepartmentController {
     @PutMapping("/{id}")
     public ResponseEntity<?> update(@PathVariable Long id, @RequestBody DepartmentRequest req) {
         User actor = currentUser.get();
-        permissionService.require(actor, Action.EDIT, ResourceType.DEPARTMENT, actor.getOrganizationId(), null);
         Department existing = departmentRepository.findByIdAndOrganizationId(id, actor.getOrganizationId())
                 .orElse(null);
         if (existing == null) throw new NoSuchElementException("department not found");
+        permissionService.require(actor, Action.EDIT, ResourceType.DEPARTMENT, existing.getOrganizationId(), existing.getHeadId());
         if (req.name != null && req.name.isBlank()) {
             return ResponseEntity.badRequest().body(Map.of("error", "name cannot be blank"));
         }
@@ -112,10 +116,10 @@ public class DepartmentController {
     @DeleteMapping("/{id}")
     public ResponseEntity<?> delete(@PathVariable Long id) {
         User actor = currentUser.get();
-        permissionService.require(actor, Action.DELETE, ResourceType.DEPARTMENT, actor.getOrganizationId(), null);
         Long orgId = actor.getOrganizationId();
         Department existing = departmentRepository.findByIdAndOrganizationId(id, orgId).orElse(null);
         if (existing == null) throw new NoSuchElementException("department not found");
+        permissionService.require(actor, Action.DELETE, ResourceType.DEPARTMENT, orgId, existing.getHeadId());
         // M18: refuse to orphan child departments or teams that point at this one
         if (departmentRepository.existsByOrganizationIdAndParentId(orgId, id)) {
             return ResponseEntity.status(409).body(Map.of(

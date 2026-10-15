@@ -1,13 +1,14 @@
 package com.betteranalytics.crm.controller;
 
 import com.betteranalytics.crm.entity.Organization;
-import com.betteranalytics.crm.entity.Role;
 import com.betteranalytics.crm.entity.User;
+import com.betteranalytics.crm.permission.Action;
+import com.betteranalytics.crm.permission.PermissionService;
+import com.betteranalytics.crm.permission.ResourceType;
 import com.betteranalytics.crm.repository.OrganizationRepository;
 import com.betteranalytics.crm.security.CurrentUser;
 import com.betteranalytics.crm.service.AuditService;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
@@ -25,18 +26,23 @@ public class OrganizationController {
     private final OrganizationRepository organizationRepository;
     private final CurrentUser            currentUser;
     private final AuditService           auditService;
+    private final PermissionService      permissionService;
 
     public OrganizationController(OrganizationRepository organizationRepository,
                                    CurrentUser currentUser,
-                                   AuditService auditService) {
+                                   AuditService auditService,
+                                   PermissionService permissionService) {
         this.organizationRepository = organizationRepository;
         this.currentUser            = currentUser;
         this.auditService           = auditService;
+        this.permissionService      = permissionService;
     }
 
     /** Returns the current user's organization profile. */
     @GetMapping("/me")
     public ResponseEntity<Organization> me() {
+        User actor = currentUser.get();
+        permissionService.require(actor, Action.VIEW, ResourceType.ORG_SETTINGS, actor.getOrganizationId(), null);
         Organization org = organizationRepository.findById(currentUser.organizationId()).orElse(null);
         if (org == null) throw new NoSuchElementException("organization not found");
         return ResponseEntity.ok(org);
@@ -46,9 +52,8 @@ public class OrganizationController {
     @PutMapping("/me")
     public ResponseEntity<?> update(@RequestBody Organization body) {
         User actor = currentUser.get();
-        if (actor.getRole() != Role.SUPER_ADMIN) {
-            throw new AccessDeniedException("only Super Admin can update the organization profile");
-        }
+        // ORG_SETTINGS EDIT: Super Admin only (FeaturePermissionTable)
+        permissionService.require(actor, Action.EDIT, ResourceType.ORG_SETTINGS, actor.getOrganizationId(), null);
         Organization org = organizationRepository.findById(currentUser.organizationId()).orElse(null);
         if (org == null) throw new NoSuchElementException("organization not found");
 
