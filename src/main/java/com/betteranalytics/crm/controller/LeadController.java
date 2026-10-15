@@ -1,23 +1,37 @@
 package com.betteranalytics.crm.controller;
 
-import com.betteranalytics.crm.dto.LeadRequest;
+import com.betteranalytics.crm.core.CrmMasks;
+import com.betteranalytics.crm.core.LeadWorkflowService;
+import com.betteranalytics.crm.core.ListParams;
+import com.betteranalytics.crm.core.Patch;
+import com.betteranalytics.crm.core.PipelineSettingsService;
+import com.betteranalytics.crm.core.Specs;
 import com.betteranalytics.crm.dto.PipelineResponse;
 import com.betteranalytics.crm.entity.Lead;
-import com.betteranalytics.crm.entity.Opportunity;
 import com.betteranalytics.crm.entity.Role;
 import com.betteranalytics.crm.entity.User;
 import com.betteranalytics.crm.permission.Action;
 import com.betteranalytics.crm.permission.PermissionService;
+import com.betteranalytics.crm.permission.PermissionService.OwnerScope;
 import com.betteranalytics.crm.permission.ResourceType;
 import com.betteranalytics.crm.repository.LeadRepository;
-import com.betteranalytics.crm.repository.OpportunityRepository;
 import com.betteranalytics.crm.security.CurrentUser;
 import com.betteranalytics.crm.service.AiAutomationService;
 import com.betteranalytics.crm.service.AuditService;
 import com.betteranalytics.crm.service.NotificationService;
 import com.betteranalytics.crm.service.TenantGuard;
-import org.springframework.security.access.AccessDeniedException;
+import com.fasterxml.jackson.databind.JsonNode;
+import jakarta.persistence.criteria.Predicate;
+import org.springframework.beans.BeanUtils;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.http.ResponseEntity;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
@@ -29,76 +43,106 @@ import java.util.stream.Collectors;
 public class LeadController {
 
     private static final Set<String> PIPELINE_GROUP_BY = Set.of("stage", "source", "leadType", "category");
+    /** The board view loads at most this many (most recently updated) leads. */
+    private static final int PIPELINE_MAX = 1000;
+
+    static final Map<String, String> SORTABLE = Map.ofEntries(
+            Map.entry("name", "name"), Map.entry("stage", "stage"), Map.entry("source", "source"),
+            Map.entry("priority", "priority"), Map.entry("value", "value"), Map.entry("followUpAt", "followUpAt"),
+            Map.entry("leadScore", "leadScore"), Map.entry("createdAt", "createdAt"),
+            Map.entry("updatedAt", "updatedAt"), Map.entry("id", "id"));
 
     private final LeadRepository        leadRepository;
-    private final OpportunityRepository opportunityRepository;
     private final CurrentUser           currentUser;
     private final AuditService          auditService;
     private final PermissionService     permissionService;
     private final NotificationService   notificationService;
     private final AiAutomationService   aiAutomationService;
     private final TenantGuard           tenantGuard;
+    private final CrmMasks              masks;
+    private final LeadWorkflowService   workflow;
+    private final PipelineSettingsService pipelineSettings;
 
-    public LeadController(LeadRepository leadRepository, OpportunityRepository opportunityRepository,
-                           CurrentUser currentUser, AuditService auditService,
-                           PermissionService permissionService,
-                           NotificationService notificationService,
-                           AiAutomationService aiAutomationService,
-                           TenantGuard tenantGuard) {
-        this.leadRepository        = leadRepository;
-        this.opportunityRepository = opportunityRepository;
-        this.currentUser           = currentUser;
-        this.auditService          = auditService;
-        this.permissionService     = permissionService;
-        this.notificationService   = notificationService;
-        this.aiAutomationService   = aiAutomationService;
-        this.tenantGuard           = tenantGuard;
+    public LeadController(LeadRepository leadRepository, CurrentUser currentUser, AuditService auditService,
+                          PermissionService permissionService, NotificationService notificationService,
+                          AiAutomationService aiAutomationService, TenantGuard tenantGuard, CrmMasks masks,
+                          LeadWorkflowService workflow, PipelineSettingsService pipelineSettings) {
+        this.leadRepository      = leadRepository;
+        this.currentUser         = currentUser;
+        this.auditService        = auditService;
+        this.permissionService   = permissionService;
+        this.notificationService = notificationService;
+        this.aiAutomationService = aiAutomationService;
+        this.tenantGuard         = tenantGuard;
+        this.masks               = masks;
+        this.workflow            = workflow;
+        this.pipelineSettings    = pipelineSettings;
     }
 
+    /**
+     * Paginated, filtered and sorted in the database; record scope is part of the
+     * WHERE clause. {@code pool=true} lists the unassigned pool (owner IS NULL).
+     */
     @GetMapping
     public Map<String, Object> list(@RequestParam(defaultValue = "") String search,
-                                     @RequestParam(defaultValue = "200") int limit) {
+                                    @RequestParam(required = false) String stage,
+                                    @RequestParam(required = false) String source,
+                                    @RequestParam(required = false) String priority,
+                                    @RequestParam(required = false) Long ownerId,
+                                    @RequestParam(required = false) Long companyId,
+                                    @RequestParam(defaultValue = "false") boolean pool,
+                                    @RequestParam(defaultValue = "false") boolean overdue,
+                                    @RequestParam(required = false) Integer page,
+                                    @RequestParam(required = false) Integer size,
+                                    @RequestParam(required = false) Integer limit,
+                                    @RequestParam(required = false) String sort) {
         User actor = currentUser.get();
-        List<Lead> leads = leadRepository.search(currentUser.organizationId(), search).stream()
-                .filter(l -> permissionService.can(actor, Action.VIEW, ResourceType.LEAD,
-                                                   l.getOrganizationId(), l.getOwnerId()))
-                .collect(Collectors.toList());
-        List<Lead> page = leads.stream().limit(TenantGuard.clampLimit(limit)).collect(Collectors.toList());
-        return Map.of("count", leads.size(),
-                      "data",  permissionService.maskLeadsForResponse(actor, page));
+        Specification<Lead> spec = visibleSpec(actor)
+                .and(searchSpec(actor, search))
+                .and(Specs.eqIgnoreCase("stage", stage))
+                .and(Specs.eqIgnoreCase("source", source))
+                .and(Specs.eqIgnoreCase("priority", priority))
+                .and(Specs.eq("ownerId", ownerId))
+                .and(Specs.eq("companyId", companyId));
+        if (pool) spec = spec.and(Specs.isNull("ownerId"));
+        if (overdue) {
+            Instant now = Instant.now();
+            spec = spec.and((root, q, cb) -> cb.and(cb.lessThan(root.get("followUpAt"), now),
+                    cb.not(root.get("stage").in("Won", "Lost"))));
+        }
+        Pageable pageable = ListParams.pageable(page, size, limit, sort, SORTABLE, Sort.by(Sort.Direction.DESC, "updatedAt"));
+        Page<Lead> result = leadRepository.findAll(spec, pageable);
+        return ListParams.response(result, masks.leads(actor, result.getContent()));
     }
 
     @GetMapping("/{id}")
     public ResponseEntity<Lead> get(@PathVariable Long id) {
-        Lead lead = find(id).orElse(null);
-        if (lead == null) throw new NoSuchElementException("lead not found");
+        Lead lead = find(id);
         User actor = currentUser.get();
-        permissionService.require(actor, Action.VIEW, ResourceType.LEAD,
-                                  lead.getOrganizationId(), lead.getOwnerId());
-        return ResponseEntity.ok(permissionService.maskLeadForResponse(actor, lead));
+        permissionService.require(actor, Action.VIEW, ResourceType.LEAD, lead.getOrganizationId(), lead.getOwnerId());
+        return ResponseEntity.ok(masks.lead(actor, lead));
     }
 
     @PostMapping
-    public ResponseEntity<?> create(@RequestBody LeadRequest req) {
+    public ResponseEntity<?> create(@RequestBody JsonNode body) {
         User actor = currentUser.get();
-        permissionService.require(actor, Action.CREATE, ResourceType.LEAD,
-                                  currentUser.organizationId(), null);
-        if (req.name == null || req.name.isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "name is required"));
-        }
-        if (req.ownerId != null && !req.ownerId.equals(actor.getId())) {
-            requireAssignableOwner(actor, req.ownerId);
-        }
-        tenantGuard.requireCompany(req.companyId);
-        // Lead score is system-computed; only Manager+ may override it (spec §3).
-        // The create form may send the default score, so for other roles the
-        // field is simply ignored here rather than rejected.
-        if (!permissionService.canOverrideLeadScore(actor)) req.leadScore = null;
+        permissionService.require(actor, Action.CREATE, ResourceType.LEAD, currentUser.organizationId(), null);
+        Patch p = Patch.of(body);
+        if (!p.hasValue("name")) throw new IllegalArgumentException("name is required");
+        Long ownerId = p.lng("ownerId");
+        if (ownerId != null && !ownerId.equals(actor.getId())) requireAssignableOwner(actor, ownerId);
+        tenantGuard.requireCompany(p.lng("companyId"));
 
         Lead lead = new Lead();
-        apply(lead, req);
+        apply(lead, p, actor, true);
+        // Lead score is system-computed; only Manager+ may set it (spec §3). The create
+        // form sends the default score, so for other roles it is ignored, not rejected.
+        if (p.has("leadScore") && permissionService.canOverrideLeadScore(actor)) {
+            Integer score = p.integer("leadScore");
+            if (score != null) lead.setLeadScore(score);
+        }
         lead.setOrganizationId(currentUser.organizationId());
-        lead.setOwnerId(req.ownerId != null ? req.ownerId : currentUser.userId());
+        lead.setOwnerId(ownerId != null ? ownerId : actor.getId());
         lead.setFollowUpRescheduleCount(0);
         lead.setCreatedAt(Instant.now());
         lead.setUpdatedAt(Instant.now());
@@ -110,61 +154,75 @@ public class LeadController {
                     "Assigned by " + actor.getName(), "Lead", lead.getId());
         }
         aiAutomationService.fireEvent(lead.getOrganizationId(), "on_lead_created", leadContext(lead));
-        return ResponseEntity.status(201).body(permissionService.maskLeadForResponse(actor, lead));
+        return ResponseEntity.status(201).body(masks.lead(actor, lead));
     }
 
-    @PutMapping("/{id}")
-    public ResponseEntity<?> update(@PathVariable Long id, @RequestBody LeadRequest req) {
-        Lead existing = find(id).orElse(null);
-        if (existing == null) throw new NoSuchElementException("lead not found");
+    /**
+     * Partial update: only fields present in the body change (PUT and PATCH behave
+     * the same). Send the {@code version} you loaded to get 409 STALE_UPDATE instead
+     * of silently overwriting someone else's change.
+     */
+    @Transactional
+    @RequestMapping(value = "/{id}", method = {RequestMethod.PUT, RequestMethod.PATCH})
+    public ResponseEntity<?> update(@PathVariable Long id, @RequestBody JsonNode body) {
+        Lead existing = find(id);
         User actor = currentUser.get();
-        permissionService.require(actor, Action.EDIT, ResourceType.LEAD,
-                                  existing.getOrganizationId(), existing.getOwnerId());
+        permissionService.require(actor, Action.EDIT, ResourceType.LEAD, existing.getOrganizationId(), existing.getOwnerId());
+        Patch p = Patch.of(body);
+        requireCurrentVersion(p, existing.getVersion(), id);
 
-        // Field-mask enforcement (step 4 of PermissionService fixed order)
-        if (req.source != null && !req.source.equals(existing.getSource())
+        // Field-mask enforcement (step 4 of PermissionService's fixed order)
+        if (p.hasValue("source") && !p.str("source").equals(existing.getSource())
                 && !permissionService.canEditLeadSource(actor, false)) {
             throw new AccessDeniedException("lead source is locked after creation for your role");
         }
-        if (req.ownerId != null && !req.ownerId.equals(existing.getOwnerId())) {
-            requireAssignableOwner(actor, req.ownerId);
+        if (p.has("ownerId") && !Objects.equals(p.lng("ownerId"), existing.getOwnerId())) {
+            Long newOwner = p.lng("ownerId");
+            if (newOwner == null) {
+                if (!permissionService.canEditLeadOwner(actor)) {
+                    throw new AccessDeniedException("you are not permitted to unassign leads");
+                }
+            } else {
+                requireAssignableOwner(actor, newOwner);
+            }
         }
-        // Lead score: changing it through a plain edit would bypass the audited
-        // score-override flow, so it's Manager+ only here as well.
-        if (req.leadScore != null && !req.leadScore.equals(existing.getLeadScore())
-                && !permissionService.canOverrideLeadScore(actor)) {
-            throw new AccessDeniedException("lead score can only be overridden by a Manager or above");
+        if (p.has("leadScore") && p.integer("leadScore") != null
+                && !p.integer("leadScore").equals(existing.getLeadScore())) {
+            // Changing the score through a plain edit would bypass the audited override flow.
+            if (!permissionService.canOverrideLeadScore(actor)) {
+                throw new AccessDeniedException("lead score can only be overridden by a Manager or above");
+            }
+            throw new IllegalArgumentException("lead score changes need a reason: use POST /api/leads/{id}/score-override");
         }
-        if (req.name != null && req.name.isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "name cannot be blank"));
+        if (p.has("name") && !p.hasValue("name")) throw new IllegalArgumentException("name cannot be blank");
+        if (p.has("companyId") && !Objects.equals(p.lng("companyId"), existing.getCompanyId())) {
+            tenantGuard.requireCompany(p.lng("companyId"));
         }
-        if (req.companyId != null && !req.companyId.equals(existing.getCompanyId())) {
-            tenantGuard.requireCompany(req.companyId);
-        }
-        // V5: Field Sales cannot change geography — a change re-routes the lead
-        if (req.geography != null && !req.geography.equals(existing.getGeography())
+        if (p.has("geography") && !Objects.equals(blankToNull(p.str("geography")), existing.getGeography())
                 && !permissionService.canEditLeadGeography(actor)) {
-            throw new AccessDeniedException(
-                    "geography determines territory routing; request the change via your Manager");
+            throw new AccessDeniedException("geography determines territory routing; request the change via your Manager");
         }
 
-        // V5: track follow-up reschedule count
-        boolean followUpChanged = req.followUpAt != null
-                && !req.followUpAt.equals(existing.getFollowUpAt());
-        if (followUpChanged && existing.getFollowUpAt() != null) {
-            // Only count as a reschedule when there was already a date set
-            existing.setFollowUpRescheduleCount(
-                    (existing.getFollowUpRescheduleCount() == null ? 0
-                            : existing.getFollowUpRescheduleCount()) + 1);
-        }
-
+        Lead before = snapshot(existing);
         Long previousOwnerId = existing.getOwnerId();
         String previousStage = existing.getStage();
-        Lead before = copy(existing);
-        apply(existing, req);
+        Instant previousFollowUp = existing.getFollowUpAt();
+
+        apply(existing, p, actor, false);
+        if (p.has("ownerId")) existing.setOwnerId(p.lng("ownerId"));
+
+        if (!Objects.equals(previousFollowUp, existing.getFollowUpAt())) {
+            // Only a change of an already-set date counts as a reschedule (spec §4).
+            if (previousFollowUp != null && existing.getFollowUpAt() != null) {
+                existing.setFollowUpRescheduleCount(
+                        (existing.getFollowUpRescheduleCount() == null ? 0 : existing.getFollowUpRescheduleCount()) + 1);
+            }
+            existing.setFollowUpNotifiedAt(null); // re-arm the overdue reminder for the new date
+        }
         existing.setUpdatedAt(Instant.now());
-        leadRepository.save(existing);
+        leadRepository.saveAndFlush(existing);
         auditService.log("update", "leads", existing.getId(), existing.getName(), before, existing);
+
         if (existing.getStage() != null && !existing.getStage().equals(previousStage)) {
             aiAutomationService.fireEvent(existing.getOrganizationId(), "on_stage_change", leadContext(existing));
         }
@@ -174,17 +232,14 @@ public class LeadController {
                     "lead_assigned", "Lead assigned to you: " + existing.getName(),
                     "Reassigned by " + actor.getName(), "Lead", existing.getId());
         }
-        return ResponseEntity.ok(permissionService.maskLeadForResponse(actor, existing));
+        return ResponseEntity.ok(masks.lead(actor, existing));
     }
 
     @DeleteMapping("/{id}")
-    public ResponseEntity<?> delete(@PathVariable Long id,
-                                     @RequestParam(required = false) String reason) {
-        Lead existing = find(id).orElse(null);
-        if (existing == null) throw new NoSuchElementException("lead not found");
+    public ResponseEntity<?> delete(@PathVariable Long id, @RequestParam(required = false) String reason) {
+        Lead existing = find(id);
         User actor = currentUser.get();
-        permissionService.require(actor, Action.DELETE, ResourceType.LEAD,
-                                  existing.getOrganizationId(), existing.getOwnerId());
+        permissionService.require(actor, Action.DELETE, ResourceType.LEAD, existing.getOrganizationId(), existing.getOwnerId());
         existing.setDeletedAt(Instant.now());
         existing.setDeletedBy(currentUser.userId());
         existing.setDeleteReason(reason);
@@ -196,18 +251,16 @@ public class LeadController {
 
     @PostMapping("/{id}/restore")
     public ResponseEntity<?> restore(@PathVariable Long id) {
-        Lead existing = leadRepository.findByIdAndOrganizationIdIncludingDeleted(
-                id, currentUser.organizationId()).orElse(null);
-        if (existing == null) throw new NoSuchElementException("lead not found");
+        Lead existing = leadRepository.findByIdAndOrganizationIdIncludingDeleted(id, currentUser.organizationId())
+                .orElseThrow(() -> new NoSuchElementException("lead not found"));
         User actor = currentUser.get();
-        permissionService.require(actor, Action.RESTORE, ResourceType.LEAD,
-                                  existing.getOrganizationId(), existing.getOwnerId());
+        permissionService.require(actor, Action.RESTORE, ResourceType.LEAD, existing.getOrganizationId(), existing.getOwnerId());
         existing.setDeletedAt(null);
         existing.setDeletedBy(null);
         existing.setDeleteReason(null);
         leadRepository.save(existing);
         auditService.log("update", "leads", id, existing.getName(), null, Map.of("restored", true));
-        return ResponseEntity.ok(permissionService.maskLeadForResponse(actor, existing));
+        return ResponseEntity.ok(masks.lead(actor, existing));
     }
 
     @GetMapping("/trash")
@@ -216,185 +269,165 @@ public class LeadController {
         return leadRepository.findTrashedByOrganizationId(currentUser.organizationId()).stream()
                 .filter(l -> permissionService.can(actor, Action.DELETE, ResourceType.LEAD,
                                                    l.getOrganizationId(), l.getOwnerId()))
-                .map(l -> permissionService.maskLeadForResponse(actor, l))
+                .map(l -> masks.lead(actor, l))
                 .collect(Collectors.toList());
     }
 
     /**
-     * V5 — Claim a lead from the unassigned pool.
-     * Spec §2: "Claim from unassigned pool — Executive: Yes, Inside Sales: Yes,
-     * Field Sales: Own territory (lead.geography matches user.territory)."
-     * SUPER_ADMIN/VP_SALES/MANAGER use assign/reassign instead of this endpoint.
+     * Claim a lead from the unassigned pool. Spec §2: Executive and Inside Sales may
+     * claim; Field Sales only inside their territory. Atomic — see LeadWorkflowService.
      */
     @PostMapping("/{id}/claim")
     public ResponseEntity<?> claim(@PathVariable Long id) {
-        Lead lead = find(id).orElse(null);
-        if (lead == null) throw new NoSuchElementException("lead not found");
-
+        Lead lead = find(id);
         User actor = currentUser.get();
         Role role = actor.getRole();
-
-        // Only rep-level roles can claim; managers use the assign endpoint
         if (role != Role.EXECUTIVE && role != Role.INSIDE_SALES && role != Role.FIELD_SALES) {
-            throw new AccessDeniedException(
-                    "use POST /api/leads/{id}/assign to reassign leads for your role");
+            throw new AccessDeniedException("use the owner field (assign) to give leads to people for your role");
         }
         if (lead.getOwnerId() != null) {
-            return ResponseEntity.badRequest()
-                    .body(Map.of("error", "lead is already assigned",
-                                 "ownerId", lead.getOwnerId()));
+            throw new IllegalStateException("this lead has already been claimed by someone else");
         }
-
-        // Field Sales can only claim leads in their territory
         if (role == Role.FIELD_SALES) {
             String territory = actor.getTerritory();
             String geography = lead.getGeography();
             if (territory == null || geography == null
                     || !geography.toLowerCase().contains(territory.toLowerCase())) {
-                return ResponseEntity.status(403)
-                        .body(Map.of("error", "lead geography does not match your territory",
-                                     "territory", territory == null ? "" : territory,
-                                     "geography", geography == null ? "" : geography));
+                throw new AccessDeniedException("lead geography does not match your territory");
             }
         }
-
-        Lead before = copy(lead);
-        Long previousOwnerId = lead.getOwnerId();
-        lead.setOwnerId(actor.getId());
-        lead.setUpdatedAt(Instant.now());
-        leadRepository.save(lead);
-        auditService.log("update", "leads", lead.getId(), lead.getName(), before,
-                         Map.of("claimed_by", actor.getId()));
-        if (previousOwnerId != null && !previousOwnerId.equals(actor.getId())) {
-            notificationService.notify(actor.getOrganizationId(), previousOwnerId,
-                    "lead_claimed", "Lead claimed: " + lead.getName(),
-                    actor.getName() + " claimed this lead", "Lead", lead.getId());
-        }
-        return ResponseEntity.ok(permissionService.maskLeadForResponse(actor, lead));
+        Lead claimed = withLockRetry(() -> workflow.claim(actor, lead));
+        return ResponseEntity.ok(masks.lead(actor, claimed));
     }
 
     /**
-     * V5 — Manager override of lead score with a mandatory reason.
-     * Spec §3: "Lead score — Manager: View; override with reason".
-     * Overrides are logged to the audit trail.
+     * Manager override of the lead score with a mandatory reason (spec §3). The
+     * reason is stored on the lead and recorded in the audit log.
      */
     @PostMapping("/{id}/score-override")
-    public ResponseEntity<?> scoreOverride(@PathVariable Long id,
-                                            @RequestBody Map<String, Object> body) {
-        Lead lead = find(id).orElse(null);
-        if (lead == null) throw new NoSuchElementException("lead not found");
-
+    public ResponseEntity<?> scoreOverride(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+        Lead lead = find(id);
         User actor = currentUser.get();
-        permissionService.require(actor, Action.EDIT, ResourceType.LEAD,
-                                  lead.getOrganizationId(), lead.getOwnerId());
+        permissionService.require(actor, Action.EDIT, ResourceType.LEAD, lead.getOrganizationId(), lead.getOwnerId());
         if (!permissionService.canOverrideLeadScore(actor)) {
             throw new AccessDeniedException("lead score can only be overridden by a Manager or above");
         }
-
         Object scoreObj  = body.get("score");
         Object reasonObj = body.get("reason");
-        if (scoreObj == null) {
-            return ResponseEntity.badRequest().body(Map.of("error", "score is required"));
-        }
+        if (scoreObj == null) throw new IllegalArgumentException("score is required");
         if (reasonObj == null || reasonObj.toString().isBlank()) {
-            return ResponseEntity.badRequest()
-                    .body(Map.of("error", "reason is required for a score override"));
+            throw new IllegalArgumentException("reason is required for a score override");
         }
-
         int newScore;
         try {
             newScore = Integer.parseInt(scoreObj.toString());
         } catch (NumberFormatException e) {
-            return ResponseEntity.badRequest().body(Map.of("error", "score must be an integer"));
+            throw new IllegalArgumentException("score must be an integer");
         }
+        if (newScore < 0 || newScore > 100) throw new IllegalArgumentException("score must be between 0 and 100");
+        String reason = reasonObj.toString().trim();
+        if (reason.length() > 500) reason = reason.substring(0, 500);
 
-        Lead before = copy(lead);
+        Lead before = snapshot(lead);
         lead.setLeadScore(newScore);
-        lead.setLeadScoreOverrideReason(reasonObj.toString());
+        lead.setLeadScoreOverrideReason(reason);
         lead.setUpdatedAt(Instant.now());
         leadRepository.save(lead);
-        auditService.log("update", "leads", lead.getId(), lead.getName(), before,
-                         Map.of("score_override", newScore, "reason", reasonObj.toString(),
-                                "overridden_by", actor.getId()));
-        return ResponseEntity.ok(permissionService.maskLeadForResponse(actor, lead));
+        Map<String, Object> after = new LinkedHashMap<>();
+        after.put("score_override", newScore);
+        after.put("previous_score", before.getLeadScore());
+        after.put("reason", reason);
+        after.put("overridden_by", actor.getId());
+        auditService.log("update", "leads", lead.getId(), lead.getName(), before, after);
+        return ResponseEntity.ok(masks.lead(actor, leadRepository.findById(lead.getId()).orElse(lead)));
     }
 
+    /**
+     * Convert to an opportunity. Idempotent: a repeated or concurrent call returns
+     * the same opportunity (200), never a second one.
+     */
     @PostMapping("/{id}/convert")
     public ResponseEntity<?> convert(@PathVariable Long id) {
-        Lead lead = find(id).orElse(null);
-        if (lead == null) throw new NoSuchElementException("lead not found");
+        Lead lead = find(id);
         User actor = currentUser.get();
-        permissionService.require(actor, Action.EDIT, ResourceType.LEAD,
-                                  lead.getOrganizationId(), lead.getOwnerId());
-
-        if (lead.getConvertedOppId() != null) {
-            return ResponseEntity.status(409).body(Map.of(
-                    "error", "this lead was already converted",
-                    "opportunityId", lead.getConvertedOppId()));
+        permissionService.require(actor, Action.EDIT, ResourceType.LEAD, lead.getOrganizationId(), lead.getOwnerId());
+        LeadWorkflowService.Conversion c = withLockRetry(() -> workflow.convert(actor, id));
+        if (c.created() && pipelineSettings.isBigDeal(actor.getOrganizationId(), c.opportunity())) {
+            pipelineSettings.alertBigDeal(actor, c.opportunity(), "created");
         }
-
-        // Ownership semantics: the opportunity belongs to whoever owns the lead.
-        // An unowned (pool) lead is first assigned to the converting user, so the
-        // converted lead can't later be "claimed" from the pool by someone else
-        // and the opp/lead/sourcedBy owners all agree.
-        Lead before = copy(lead);
-        if (lead.getOwnerId() == null) lead.setOwnerId(actor.getId());
-
-        Opportunity opp = new Opportunity();
-        opp.setOrganizationId(currentUser.organizationId());
-        opp.setName(lead.getName());
-        opp.setCompanyId(lead.getCompanyId());
-        opp.setOwnerId(lead.getOwnerId());
-        opp.setStage(OpportunityController.STAGES.get(0)); // "Qualification"
-        opp.setValue(lead.getValue() != null ? lead.getValue() : 0L);
-        opp.setProbability(50);
-        opp.setNotes(lead.getNotes());
-        opp.setServiceProduct(lead.getRequirement());
-        // V5: back-link so Inside Sales can track outcome of their qualified leads
-        opp.setSourceLeadId(lead.getId());
-        opp.setSourcedByUserId(lead.getOwnerId());
-        opp.setCreatedAt(Instant.now());
-        opp.setUpdatedAt(Instant.now());
-        opportunityRepository.save(opp);
-
-        lead.setStage("Won");
-        lead.setConvertedAt(Instant.now());
-        lead.setConvertedOppId(opp.getId());
-        lead.setUpdatedAt(Instant.now());
-        leadRepository.save(lead);
-
-        auditService.log("update", "leads", lead.getId(), lead.getName(), before,
-                         Map.of("converted", true, "opportunityId", opp.getId(),
-                                "ownerId", lead.getOwnerId()));
-        auditService.log("create", "opportunities", opp.getId(), opp.getName(), null, opp);
-
-        // L1: same field masks as every other read — e.g. Inside Sales must not
-        // see the new deal's value or the now-handed-off lead's contact details.
-        return ResponseEntity.ok(Map.of("ok", true,
-                "lead", permissionService.maskLeadForResponse(actor, lead),
-                "opportunity", permissionService.maskOpportunityForResponse(actor, opp)));
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("ok", true);
+        out.put("created", c.created());
+        out.put("lead", masks.lead(actor, c.lead()));
+        out.put("opportunity", masks.opportunity(actor, c.opportunity()));
+        out.put("contactId", c.contact() == null ? null : c.contact().getId());
+        return ResponseEntity.ok(out);
     }
 
     @GetMapping("/pipeline")
     public ResponseEntity<?> pipeline(@RequestParam(defaultValue = "stage") String groupBy) {
         if (!PIPELINE_GROUP_BY.contains(groupBy)) {
-            return ResponseEntity.badRequest()
-                    .body(Map.of("error", "groupBy must be one of " + PIPELINE_GROUP_BY));
+            throw new IllegalArgumentException("groupBy must be one of " + PIPELINE_GROUP_BY);
         }
         User actor = currentUser.get();
-        List<Lead> leads = leadRepository.findByOrganizationId(currentUser.organizationId()).stream()
-                .filter(l -> permissionService.can(actor, Action.VIEW, ResourceType.LEAD,
-                                                   l.getOrganizationId(), l.getOwnerId()))
-                .collect(Collectors.toList());
-        // Every column goes through the same contact-info mask as the list endpoint;
-        // previously the board view returned raw leads and leaked masked fields.
-        Map<String, List<Lead>> columns = permissionService.maskLeadsForResponse(actor, leads).stream()
-                .collect(Collectors.groupingBy(l -> keyFor(l, groupBy),
-                                               LinkedHashMap::new, Collectors.toList()));
+        List<Lead> leads = leadRepository.findAll(visibleSpec(actor),
+                PageRequest.of(0, PIPELINE_MAX, Sort.by(Sort.Direction.DESC, "updatedAt"))).getContent();
+        Map<String, List<Lead>> columns = masks.leads(actor, leads).stream()
+                .collect(Collectors.groupingBy(l -> keyFor(l, groupBy), LinkedHashMap::new, Collectors.toList()));
         return ResponseEntity.ok(new PipelineResponse(groupBy, columns));
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────────
+
+    /** Organisation + record scope as a query predicate; 403 for roles with no lead access. */
+    private Specification<Lead> visibleSpec(User actor) {
+        OwnerScope scope = permissionService.ownerScope(actor, Action.VIEW, ResourceType.LEAD);
+        if (scope.none()) throw new AccessDeniedException("not permitted: " + actor.getRole() + " cannot VIEW leads");
+        return Specs.<Lead>org(actor.getOrganizationId()).and(Specs.ownedWithin(scope, "ownerId"));
+    }
+
+    /**
+     * Name / business name / email search. For users who see handed-off leads with
+     * masked contact details (Inside Sales), the email only matches on leads whose
+     * contact info they may still read — otherwise search would be an oracle.
+     */
+    private Specification<Lead> searchSpec(User actor, String search) {
+        if (search == null || search.isBlank()) return Specs.search(null);
+        String pattern = ListParams.likePattern(search);
+        boolean maskedAfterHandOff = actor.getRole() == Role.INSIDE_SALES;
+        return (root, q, cb) -> {
+            List<Predicate> any = new ArrayList<>();
+            any.add(cb.like(cb.lower(root.get("name")), pattern, '\\'));
+            any.add(cb.like(cb.lower(root.get("businessName")), pattern, '\\'));
+            Predicate email = cb.like(cb.lower(root.get("email")), pattern, '\\');
+            any.add(maskedAfterHandOff ? cb.and(email, cb.isNull(root.get("convertedOppId"))) : email);
+            return cb.or(any.toArray(Predicate[]::new));
+        };
+    }
+
+    /**
+     * Claim and convert are idempotent / conditional, so when the database gives up
+     * waiting for a row lock held by a concurrent call (lock timeout) or the unique
+     * index catches a race, simply running them again yields the correct answer.
+     */
+    private static <T> T withLockRetry(java.util.function.Supplier<T> op) {
+        for (int attempt = 1; ; attempt++) {
+            try {
+                return op.get();
+            } catch (org.springframework.dao.PessimisticLockingFailureException
+                     | org.springframework.dao.DataIntegrityViolationException e) {
+                if (attempt >= 3) throw e;
+            }
+        }
+    }
+
+    private void requireCurrentVersion(Patch p, Long current, Long id) {
+        if (!p.has("version")) return;
+        Long sent = p.lng("version");
+        if (sent != null && !sent.equals(current)) {
+            throw new ObjectOptimisticLockingFailureException(Lead.class, id);
+        }
+    }
 
     /** {{variable}} context handed to any AiAutomation fired for this lead. */
     private Map<String, String> leadContext(Lead lead) {
@@ -411,12 +444,13 @@ public class LeadController {
         return ctx;
     }
 
-    private String nz(String s) { return s == null ? "" : s; }
+    private static String nz(String s) { return s == null ? "" : s; }
+
+    private static String blankToNull(String s) { return s == null || s.isBlank() ? null : s; }
 
     /**
      * Assigning a lead: Manager+ only (Lead.ownerId is read-only below Manager),
-     * Managers only within their team ("Assign / reassign leads: Within team"),
-     * and the target must be a user of this org.
+     * Managers only within their team, and the target must be a user of this org.
      */
     private void requireAssignableOwner(User actor, Long ownerId) {
         tenantGuard.requireUser(ownerId);
@@ -428,36 +462,44 @@ public class LeadController {
         }
     }
 
-    private Optional<Lead> find(Long id) {
-        return leadRepository.findByIdAndOrganizationId(id, currentUser.organizationId());
+    private Lead find(Long id) {
+        return leadRepository.findByIdAndOrganizationId(id, currentUser.organizationId())
+                .orElseThrow(() -> new NoSuchElementException("lead not found"));
     }
 
-    private void apply(Lead lead, LeadRequest req) {
-        if (req.name          != null) lead.setName(req.name);
-        if (req.email         != null) lead.setEmail(req.email);
-        if (req.phone         != null) lead.setPhone(req.phone);
-        if (req.companyId     != null) lead.setCompanyId(req.companyId);
-        if (req.ownerId       != null) lead.setOwnerId(req.ownerId);
-        if (req.stage         != null) lead.setStage(req.stage);
-        if (req.source        != null) lead.setSource(req.source);
-        if (req.priority      != null) lead.setPriority(req.priority);
-        if (req.value         != null) lead.setValue(req.value);
-        if (req.notes         != null) lead.setNotes(req.notes);
-        if (req.tags          != null) lead.setTags(req.tags);
-        if (req.followUpAt    != null) lead.setFollowUpAt(req.followUpAt);
-        if (req.address       != null) lead.setAddress(req.address);
-        if (req.businessName  != null) lead.setBusinessName(req.businessName);
-        if (req.category      != null) lead.setCategory(req.category);
-        if (req.leadType      != null) lead.setLeadType(req.leadType);
-        if (req.industry      != null) lead.setIndustry(req.industry);
-        if (req.geography     != null) lead.setGeography(req.geography);
-        if (req.employeeBand  != null) lead.setEmployeeBand(req.employeeBand);
-        if (req.revenueBand   != null) lead.setRevenueBand(req.revenueBand);
-        if (req.requirement   != null) lead.setRequirement(req.requirement);
-        if (req.painPoint     != null) lead.setPainPoint(req.painPoint);
-        if (req.technologyUsed != null) lead.setTechnologyUsed(req.technologyUsed);
-        if (req.decisionMaker != null) lead.setDecisionMaker(req.decisionMaker);
-        if (req.leadScore     != null) lead.setLeadScore(req.leadScore);
+    /**
+     * Applies the client-editable fields present in the body. Owner, score, version and
+     * every server-managed column are handled by the caller. Contact details the actor
+     * only sees masked are ignored, so saving a form never writes "••••" over them.
+     */
+    private void apply(Lead lead, Patch p, User actor, boolean creating) {
+        p.requiredText("name", lead::setName);
+        boolean contactVisible = creating || permissionService.canViewLeadContactInfo(actor, lead);
+        if (contactVisible) {
+            if (!CrmMasks.isMask(p.str("email"))) p.text("email", lead::setEmail);
+            if (!CrmMasks.isMask(p.str("phone"))) p.text("phone", lead::setPhone);
+        }
+        p.longValue("companyId", lead::setCompanyId);
+        p.requiredText("stage", lead::setStage);
+        p.requiredText("source", lead::setSource);
+        p.requiredText("priority", lead::setPriority);
+        p.longValue("value", lead::setValue);
+        p.text("notes", lead::setNotes);
+        p.text("tags", lead::setTags);
+        p.instantValue("followUpAt", lead::setFollowUpAt);
+        p.text("address", lead::setAddress);
+        p.text("businessName", lead::setBusinessName);
+        p.text("category", lead::setCategory);
+        p.text("leadType", lead::setLeadType);
+        p.text("industry", lead::setIndustry);
+        p.text("geography", lead::setGeography);
+        p.text("employeeBand", lead::setEmployeeBand);
+        p.text("revenueBand", lead::setRevenueBand);
+        p.text("requirement", lead::setRequirement);
+        p.text("painPoint", lead::setPainPoint);
+        p.text("technologyUsed", lead::setTechnologyUsed);
+        p.text("decisionMaker", lead::setDecisionMaker);
+        if (lead.getValue() != null && lead.getValue() < 0) throw new IllegalArgumentException("value must not be negative");
     }
 
     private String keyFor(Lead lead, String groupBy) {
@@ -470,27 +512,9 @@ public class LeadController {
         return (value == null || value.isBlank()) ? "Uncategorized" : value;
     }
 
-    private Lead copy(Lead l) {
+    private static Lead snapshot(Lead l) {
         Lead c = new Lead();
-        apply(c, toRequest(l));
-        c.setFollowUpRescheduleCount(l.getFollowUpRescheduleCount());
-        c.setLeadScoreOverrideReason(l.getLeadScoreOverrideReason());
+        BeanUtils.copyProperties(l, c);
         return c;
-    }
-
-    private LeadRequest toRequest(Lead l) {
-        LeadRequest r = new LeadRequest();
-        r.name = l.getName(); r.email = l.getEmail(); r.phone = l.getPhone();
-        r.companyId = l.getCompanyId(); r.ownerId = l.getOwnerId(); r.stage = l.getStage();
-        r.source = l.getSource(); r.priority = l.getPriority(); r.value = l.getValue();
-        r.notes = l.getNotes(); r.tags = l.getTags(); r.followUpAt = l.getFollowUpAt();
-        r.address = l.getAddress(); r.businessName = l.getBusinessName();
-        r.category = l.getCategory(); r.leadType = l.getLeadType();
-        r.industry = l.getIndustry(); r.geography = l.getGeography();
-        r.employeeBand = l.getEmployeeBand(); r.revenueBand = l.getRevenueBand();
-        r.requirement = l.getRequirement(); r.painPoint = l.getPainPoint();
-        r.technologyUsed = l.getTechnologyUsed(); r.decisionMaker = l.getDecisionMaker();
-        r.leadScore = l.getLeadScore();
-        return r;
     }
 }

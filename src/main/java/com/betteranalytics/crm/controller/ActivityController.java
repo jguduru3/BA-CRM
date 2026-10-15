@@ -1,15 +1,23 @@
 package com.betteranalytics.crm.controller;
 
+import com.betteranalytics.crm.core.ListParams;
+import com.betteranalytics.crm.core.Specs;
 import com.betteranalytics.crm.entity.Activity;
+import com.betteranalytics.crm.entity.Role;
 import com.betteranalytics.crm.entity.User;
 import com.betteranalytics.crm.permission.Action;
 import com.betteranalytics.crm.permission.PermissionService;
+import com.betteranalytics.crm.permission.PermissionService.OwnerScope;
 import com.betteranalytics.crm.permission.ResourceType;
 import com.betteranalytics.crm.repository.ActivityRepository;
 import com.betteranalytics.crm.security.CurrentUser;
 import com.betteranalytics.crm.service.AuditService;
 import com.betteranalytics.crm.service.TenantGuard;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
@@ -54,24 +62,68 @@ public class ActivityController {
     private static final Comparator<Activity> NEWEST_FIRST =
             Comparator.comparing(Activity::getCreatedAt, Comparator.nullsFirst(Comparator.naturalOrder())).reversed();
 
+    private static final Map<String, String> SORTABLE = Map.of(
+            "createdAt", "createdAt", "type", "type", "scheduledAt", "scheduledAt",
+            "completedAt", "completedAt", "id", "id");
+
+    /** Newest first by default; filtered, scoped and paginated in the database. */
     @GetMapping
-    public Map<String, Object> list(@RequestParam(defaultValue = "200") int limit,
-                                     @RequestParam(required = false) String relatedType,
-                                     @RequestParam(required = false) Long relatedId) {
+    public Map<String, Object> list(@RequestParam(required = false) String relatedType,
+                                    @RequestParam(required = false) Long relatedId,
+                                    @RequestParam(required = false) String type,
+                                    @RequestParam(required = false) Long userId,
+                                    @RequestParam(defaultValue = "") String search,
+                                    @RequestParam(required = false) Integer page,
+                                    @RequestParam(required = false) Integer size,
+                                    @RequestParam(required = false) Integer limit,
+                                    @RequestParam(required = false) String sort,
+                                    @RequestParam(defaultValue = "false") boolean withCorrections) {
         User actor = currentUser.get();
-        int max = TenantGuard.clampLimit(limit);
-        List<Activity> all = activityRepository.findByOrganizationId(currentUser.organizationId())
-                .stream()
-                .filter(a -> permissionService.can(actor, Action.VIEW, ResourceType.ACTIVITY,
-                                                   a.getOrganizationId(), a.getUserId()))
-                .filter(a -> relatedType == null || relatedType.equalsIgnoreCase(a.getRelatedType()))
-                .filter(a -> relatedId   == null || relatedId.equals(a.getRelatedId()))
-                .collect(Collectors.toList());
-        all.sort(NEWEST_FIRST);
-        List<Activity> page = all.stream().limit(max).collect(Collectors.toList());
+        OwnerScope scope = permissionService.ownerScope(actor, Action.VIEW, ResourceType.ACTIVITY);
+        if (scope.none()) throw new AccessDeniedException("not permitted: " + actor.getRole() + " cannot VIEW activities");
+        Specification<Activity> spec = Specs.<Activity>org(actor.getOrganizationId())
+                .and(Specs.ownedWithin(scope, "userId"))
+                .and(Specs.eqIgnoreCase("relatedType", relatedType))
+                .and(Specs.eq("relatedId", relatedId))
+                .and(Specs.eqIgnoreCase("type", type))
+                .and(Specs.eq("userId", userId));
+        if (search != null && !search.isBlank()) {
+            spec = spec.and(Specs.search(search, "subject", "outcome"));
+            // Subjects of other people's activities are "[restricted]" for reps, so their
+            // search only looks at their own entries — otherwise it would be an oracle.
+            Role r = actor.getRole();
+            if (r != Role.SUPER_ADMIN && r != Role.VP_SALES && r != Role.MANAGER) {
+                spec = spec.and(Specs.eq("userId", actor.getId()));
+            }
+        }
+        Page<Activity> result = activityRepository.findAll(spec,
+                ListParams.pageable(page, size, limit, sort, SORTABLE, Sort.by(Sort.Direction.DESC, "createdAt")));
         // V5: mask body/subject for entries the actor isn't allowed to read in full
-        return Map.of("count", all.size(),
-                      "data",  permissionService.maskActivitiesForResponse(actor, page));
+        Map<String, Object> out = ListParams.response(result, permissionService.maskActivitiesForResponse(actor, result.getContent()));
+        if (withCorrections) {
+            // Two bounded queries so the timeline can show "corrected" entries next to their
+            // originals: the corrections of originals on this page, and the originals of
+            // corrections on this page — both within the reader's scope and masked.
+            Specification<Activity> visible = Specs.<Activity>org(actor.getOrganizationId())
+                    .and(Specs.ownedWithin(scope, "userId"));
+            List<Long> ids = result.getContent().stream().map(Activity::getId).toList();
+            List<Long> originalIds = result.getContent().stream()
+                    .map(Activity::getCorrectionForId).filter(java.util.Objects::nonNull).distinct().toList();
+            Map<Long, List<Activity>> corrections = new java.util.LinkedHashMap<>();
+            if (!ids.isEmpty()) {
+                activityRepository.findAll(visible.and(Specs.in("correctionForId", ids)), Sort.by(Sort.Direction.DESC, "createdAt"))
+                        .forEach(c -> corrections.computeIfAbsent(c.getCorrectionForId(), k -> new java.util.ArrayList<>())
+                                .add(permissionService.maskActivityForResponse(actor, c)));
+            }
+            Map<Long, Activity> originals = new java.util.LinkedHashMap<>();
+            if (!originalIds.isEmpty()) {
+                activityRepository.findAll(visible.and(Specs.in("id", originalIds)))
+                        .forEach(o -> originals.put(o.getId(), permissionService.maskActivityForResponse(actor, o)));
+            }
+            out.put("corrections", corrections);
+            out.put("originals", originals);
+        }
+        return out;
     }
 
     @GetMapping("/{id}")

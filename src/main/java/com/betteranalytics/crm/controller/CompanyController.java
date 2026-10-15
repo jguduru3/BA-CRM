@@ -1,153 +1,182 @@
 package com.betteranalytics.crm.controller;
 
+import com.betteranalytics.crm.core.CompanyDeletionService;
+import com.betteranalytics.crm.core.ListParams;
+import com.betteranalytics.crm.core.Patch;
+import com.betteranalytics.crm.core.Specs;
 import com.betteranalytics.crm.entity.Company;
+import com.betteranalytics.crm.entity.Role;
 import com.betteranalytics.crm.entity.User;
 import com.betteranalytics.crm.permission.Action;
 import com.betteranalytics.crm.permission.PermissionService;
+import com.betteranalytics.crm.permission.PermissionService.OwnerScope;
 import com.betteranalytics.crm.permission.ResourceType;
 import com.betteranalytics.crm.repository.CompanyRepository;
 import com.betteranalytics.crm.security.CurrentUser;
+import com.betteranalytics.crm.security.UrlFields;
 import com.betteranalytics.crm.service.AuditService;
 import com.betteranalytics.crm.service.TenantGuard;
+import com.fasterxml.jackson.databind.JsonNode;
+import org.springframework.beans.BeanUtils;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
-import java.util.NoSuchElementException;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/companies")
 public class CompanyController {
 
+    private static final Map<String, String> SORTABLE = Map.of(
+            "name", "name", "industry", "industry", "status", "status", "revenue", "revenue",
+            "location", "location", "createdAt", "createdAt", "updatedAt", "updatedAt", "id", "id");
+
     private final CompanyRepository companyRepository;
     private final CurrentUser currentUser;
     private final AuditService auditService;
     private final PermissionService permissionService;
     private final TenantGuard tenantGuard;
+    private final CompanyDeletionService deletion;
 
     public CompanyController(CompanyRepository companyRepository, CurrentUser currentUser,
-                              AuditService auditService, PermissionService permissionService,
-                              TenantGuard tenantGuard) {
+                             AuditService auditService, PermissionService permissionService,
+                             TenantGuard tenantGuard, CompanyDeletionService deletion) {
         this.companyRepository = companyRepository;
         this.currentUser = currentUser;
         this.auditService = auditService;
         this.permissionService = permissionService;
         this.tenantGuard = tenantGuard;
+        this.deletion = deletion;
     }
 
     @GetMapping
     public Map<String, Object> list(@RequestParam(defaultValue = "") String search,
-                                     @RequestParam(defaultValue = "100") int limit) {
+                                    @RequestParam(required = false) String status,
+                                    @RequestParam(required = false) String industry,
+                                    @RequestParam(required = false) Long ownerId,
+                                    @RequestParam(required = false) Integer page,
+                                    @RequestParam(required = false) Integer size,
+                                    @RequestParam(required = false) Integer limit,
+                                    @RequestParam(required = false) String sort) {
         User actor = currentUser.get();
-        String q = search.toLowerCase();
-        List<Company> filtered = companyRepository.findByOrganizationId(currentUser.organizationId()).stream()
-                .filter(c -> q.isBlank() || (c.getName() != null && c.getName().toLowerCase().contains(q)))
-                .filter(c -> permissionService.can(actor, Action.VIEW, ResourceType.COMPANY, c.getOrganizationId(), c.getOwnerId()))
-                .collect(Collectors.toList());
-        return Map.of("count", filtered.size(),
-                      "data", filtered.stream().limit(TenantGuard.clampLimit(limit)).collect(Collectors.toList()));
+        Specification<Company> spec = visibleSpec(actor)
+                .and(Specs.search(search, "name", "industry", "location", "email", "website"))
+                .and(Specs.eqIgnoreCase("status", status))
+                .and(Specs.eqIgnoreCase("industry", industry))
+                .and(Specs.eq("ownerId", ownerId));
+        Page<Company> result = companyRepository.findAll(spec,
+                ListParams.pageable(page, size, limit, sort, SORTABLE, Sort.by(Sort.Direction.ASC, "name")));
+        return ListParams.response(result, result.getContent());
     }
 
     @GetMapping("/{id}")
     public ResponseEntity<Company> get(@PathVariable Long id) {
-        Company company = find(id).orElse(null);
-        if (company == null) throw new NoSuchElementException("company not found");
+        Company company = find(id);
         User actor = currentUser.get();
         permissionService.require(actor, Action.VIEW, ResourceType.COMPANY, company.getOrganizationId(), company.getOwnerId());
         return ResponseEntity.ok(company);
     }
 
     @PostMapping
-    public ResponseEntity<?> create(@RequestBody Company body) {
+    public ResponseEntity<?> create(@RequestBody JsonNode body) {
         User actor = currentUser.get();
         permissionService.require(actor, Action.CREATE, ResourceType.COMPANY, currentUser.organizationId(), null);
-        if (body.getName() == null || body.getName().isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "name is required"));
-        }
-        if (body.getOwnerId() != null && !body.getOwnerId().equals(actor.getId())) {
-            requireAssignableOwner(actor, body.getOwnerId());
-        }
-        // H12: the entity is bound straight from JSON — reset every server-owned column
-        body.setId(null);
-        body.setOrganizationId(currentUser.organizationId());
-        body.setDeletedAt(null);
-        body.setDeletedBy(null);
-        body.setDeleteReason(null);
-        if (body.getOwnerId() == null) body.setOwnerId(currentUser.userId());
-        if (body.getStatus() == null) body.setStatus("Prospect"); // column is NOT NULL
-        body.setCreatedAt(Instant.now());
-        body.setUpdatedAt(Instant.now());
-        companyRepository.save(body);
-        auditService.log("create", "companies", body.getId(), body.getName(), null, body);
-        return ResponseEntity.status(201).body(body);
+        Patch p = Patch.of(body);
+        if (!p.hasValue("name")) throw new IllegalArgumentException("name is required");
+        Long ownerId = p.lng("ownerId");
+        if (ownerId != null && !ownerId.equals(actor.getId())) requireAssignableOwner(actor, ownerId);
+
+        Company company = new Company();
+        apply(company, p);
+        company.setOrganizationId(currentUser.organizationId());
+        company.setOwnerId(ownerId != null ? ownerId : actor.getId());
+        company.setCreatedAt(Instant.now());
+        company.setUpdatedAt(Instant.now());
+        companyRepository.save(company);
+        auditService.log("create", "companies", company.getId(), company.getName(), null, company);
+        return ResponseEntity.status(201).body(company);
     }
 
-    @PutMapping("/{id}")
-    public ResponseEntity<?> update(@PathVariable Long id, @RequestBody Company body) {
-        Company existing = find(id).orElse(null);
-        if (existing == null) throw new NoSuchElementException("company not found");
+    /** Partial update (PUT and PATCH): only fields present in the body change. */
+    @RequestMapping(value = "/{id}", method = {RequestMethod.PUT, RequestMethod.PATCH})
+    public ResponseEntity<?> update(@PathVariable Long id, @RequestBody JsonNode body) {
+        Company existing = find(id);
         User actor = currentUser.get();
         permissionService.require(actor, Action.EDIT, ResourceType.COMPANY, existing.getOrganizationId(), existing.getOwnerId());
-        if (body.getName() != null && body.getName().isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "name cannot be blank"));
-        }
-        // H10: Company EDIT is org-wide for every sales role, so without this any rep
-        // could take ownership of (or dump) any account.
-        if (body.getOwnerId() != null && !body.getOwnerId().equals(existing.getOwnerId())) {
-            requireAssignableOwner(actor, body.getOwnerId());
-        }
+        Patch p = Patch.of(body);
+        if (p.has("name") && !p.hasValue("name")) throw new IllegalArgumentException("name cannot be blank");
+        // H10: Company EDIT is org-wide for every sales role, so ownership changes are
+        // Manager+ and team-bounded — otherwise any rep could take over any account.
+        Long newOwner = p.lng("ownerId");
+        if (newOwner != null && !newOwner.equals(existing.getOwnerId())) requireAssignableOwner(actor, newOwner);
 
-        Company before = copyOf(existing);
-        if (body.getName() != null) existing.setName(body.getName());
-        if (body.getIndustry() != null) existing.setIndustry(body.getIndustry());
-        if (body.getSize() != null) existing.setSize(body.getSize());
-        if (body.getWebsite() != null) existing.setWebsite(body.getWebsite());
-        if (body.getPhone() != null) existing.setPhone(body.getPhone());
-        if (body.getEmail() != null) existing.setEmail(body.getEmail());
-        if (body.getLocation() != null) existing.setLocation(body.getLocation());
-        if (body.getRevenue() != null) existing.setRevenue(body.getRevenue());
-        if (body.getStatus() != null) existing.setStatus(body.getStatus());
-        if (body.getNotes() != null) existing.setNotes(body.getNotes());
-        if (body.getOwnerId() != null) existing.setOwnerId(body.getOwnerId());
+        Company before = snapshot(existing);
+        apply(existing, p);
+        if (newOwner != null) existing.setOwnerId(newOwner);
         existing.setUpdatedAt(Instant.now());
         companyRepository.save(existing);
         auditService.log("update", "companies", id, existing.getName(), before, existing);
         return ResponseEntity.ok(existing);
     }
 
-    // Soft delete — sets deleted_at/deleted_by/delete_reason instead of
-    // destroying the row. The entity's @SQLRestriction then hides it from
-    // every normal query automatically.
+    /**
+     * Soft delete. A company that still has live contacts / opportunities / leads
+     * is refused with 409 and the counts, unless {@code cascade=true} (Manager+),
+     * which moves those children to the trash too.
+     */
     @DeleteMapping("/{id}")
-    public ResponseEntity<?> delete(@PathVariable Long id, @RequestParam(required = false) String reason) {
-        Company existing = find(id).orElse(null);
-        if (existing == null) throw new NoSuchElementException("company not found");
+    public ResponseEntity<?> delete(@PathVariable Long id,
+                                    @RequestParam(required = false) String reason,
+                                    @RequestParam(defaultValue = "false") boolean cascade) {
+        Company existing = find(id);
         User actor = currentUser.get();
         permissionService.require(actor, Action.DELETE, ResourceType.COMPANY, existing.getOrganizationId(), existing.getOwnerId());
-        existing.setDeletedAt(Instant.now());
-        existing.setDeletedBy(currentUser.userId());
-        existing.setDeleteReason(reason);
-        companyRepository.save(existing);
-        auditService.log("delete", "companies", id, existing.getName(), existing, Map.of("reason", reason == null ? "" : reason));
-        return ResponseEntity.ok(Map.of("ok", true));
+        Map<String, Long> children = deletion.childCounts(existing);
+        boolean hasChildren = children.values().stream().anyMatch(n -> n > 0);
+        if (hasChildren && !cascade) {
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("error", "\"" + existing.getName() + "\" still has " + CompanyDeletionService.describe(children)
+                    + ". Move or delete them first, or delete everything together.");
+            body.put("code", "HAS_CHILDREN");
+            body.put("children", children);
+            return ResponseEntity.status(409).body(body);
+        }
+        if (hasChildren && !isManagerUp(actor)) {
+            throw new AccessDeniedException("only a Manager or above can delete a company together with its records");
+        }
+        Company before = snapshot(existing);
+        Map<String, Integer> removed = deletion.softDelete(existing, actor.getId(), reason, cascade && hasChildren);
+        Map<String, Object> after = new LinkedHashMap<>();
+        after.put("reason", reason == null ? "" : reason);
+        if (!removed.isEmpty()) after.put("cascaded", removed);
+        auditService.log("delete", "companies", id, existing.getName(), before, after);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("ok", true);
+        if (!removed.isEmpty()) out.put("cascaded", removed);
+        return ResponseEntity.ok(out);
     }
 
     @PostMapping("/{id}/restore")
     public ResponseEntity<?> restore(@PathVariable Long id) {
-        Company existing = companyRepository.findByIdAndOrganizationIdIncludingDeleted(id, currentUser.organizationId()).orElse(null);
-        if (existing == null) throw new NoSuchElementException("company not found");
+        Company existing = companyRepository.findByIdAndOrganizationIdIncludingDeleted(id, currentUser.organizationId())
+                .orElseThrow(() -> new NoSuchElementException("company not found"));
         User actor = currentUser.get();
         permissionService.require(actor, Action.RESTORE, ResourceType.COMPANY, existing.getOrganizationId(), existing.getOwnerId());
         existing.setDeletedAt(null);
         existing.setDeletedBy(null);
         existing.setDeleteReason(null);
         companyRepository.save(existing);
-        auditService.log("update", "companies", id, existing.getName(), null, Map.of("restored", true));
+        Map<String, Integer> restored = deletion.restoreCascaded(existing);
+        Map<String, Object> after = new LinkedHashMap<>();
+        after.put("restored", true);
+        after.put("children", restored);
+        auditService.log("update", "companies", id, existing.getName(), null, after);
         return ResponseEntity.ok(existing);
     }
 
@@ -159,8 +188,19 @@ public class CompanyController {
                 .collect(Collectors.toList());
     }
 
-    private Optional<Company> find(Long id) {
-        return companyRepository.findByIdAndOrganizationId(id, currentUser.organizationId());
+    private Specification<Company> visibleSpec(User actor) {
+        OwnerScope scope = permissionService.ownerScope(actor, Action.VIEW, ResourceType.COMPANY);
+        if (scope.none()) throw new AccessDeniedException("not permitted: " + actor.getRole() + " cannot VIEW companies");
+        return Specs.<Company>org(actor.getOrganizationId()).and(Specs.ownedWithin(scope, "ownerId"));
+    }
+
+    private Company find(Long id) {
+        return companyRepository.findByIdAndOrganizationId(id, currentUser.organizationId())
+                .orElseThrow(() -> new NoSuchElementException("company not found"));
+    }
+
+    private static boolean isManagerUp(User u) {
+        return u.getRole() == Role.SUPER_ADMIN || u.getRole() == Role.VP_SALES || u.getRole() == Role.MANAGER;
     }
 
     /**
@@ -174,23 +214,24 @@ public class CompanyController {
         }
     }
 
-    private Company copyOf(Company c) {
+    /** Client-editable fields; website must be a safe http(s)/mailto link (400 otherwise). */
+    private void apply(Company c, Patch p) {
+        p.requiredText("name", c::setName);
+        p.text("industry", c::setIndustry);
+        p.text("size", c::setSize);
+        if (p.has("website")) c.setWebsite(UrlFields.normalize("website", p.str("website")));
+        p.text("phone", c::setPhone);
+        p.text("email", c::setEmail);
+        p.text("location", c::setLocation);
+        p.longValue("revenue", c::setRevenue);
+        p.requiredText("status", c::setStatus);
+        p.text("notes", c::setNotes);
+        if (c.getRevenue() != null && c.getRevenue() < 0) throw new IllegalArgumentException("revenue must not be negative");
+    }
+
+    private static Company snapshot(Company c) {
         Company copy = new Company();
-        copy.setId(c.getId());
-        copy.setOrganizationId(c.getOrganizationId());
-        copy.setName(c.getName());
-        copy.setIndustry(c.getIndustry());
-        copy.setSize(c.getSize());
-        copy.setWebsite(c.getWebsite());
-        copy.setPhone(c.getPhone());
-        copy.setEmail(c.getEmail());
-        copy.setLocation(c.getLocation());
-        copy.setRevenue(c.getRevenue());
-        copy.setStatus(c.getStatus());
-        copy.setNotes(c.getNotes());
-        copy.setOwnerId(c.getOwnerId());
-        copy.setCreatedAt(c.getCreatedAt());
-        copy.setUpdatedAt(c.getUpdatedAt());
+        BeanUtils.copyProperties(c, copy);
         return copy;
     }
 }
