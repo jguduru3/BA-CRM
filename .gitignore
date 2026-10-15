@@ -49,3 +49,8 @@ build/
 ### Frontend ###
 frontend/node_modules/
 frontend/dist/
+
+# tsc -b output for the Vite config
+frontend/vite.config.js
+frontend/vite.config.d.ts
+frontend/*.tsbuildinfo
