@@ -17,10 +17,11 @@ import java.util.Base64;
  * (AI provider keys, WhatsApp access tokens, SMTP/IMAP passwords, webhook
  * signing secrets). Values are stored as "enc:v1:" + base64(iv || ciphertext+tag).
  *
- * The key comes from APP_ENCRYPTION_KEY; when that is unset it is derived from
- * JWT_SECRET under a separate label so the two keys are never identical. Values
- * written before encryption existed (no prefix) are read back as-is and get
- * encrypted the next time they are saved — no data migration needed.
+ * The key comes from ENCRYPTION_KEY (legacy name APP_ENCRYPTION_KEY) and is
+ * mandatory (32+ bytes) outside the local and test profiles; only there is a
+ * dev key derived from JWT_SECRET under a separate label. Values written before
+ * encryption existed (no prefix) are read back as-is; the V50 Java migration
+ * (EncryptPlaintextSecretsMigration) encrypts them in place.
  */
 @Component
 public class SecretCrypto {
@@ -39,16 +40,31 @@ public class SecretCrypto {
                         @Value("${app.jwt.secret}") String jwtSecret,
                         @Value("${app.jwt.enforce-strong-secret:true}") boolean enforceStrong) {
         boolean provided = encryptionKey != null && !encryptionKey.isBlank();
-        if (enforceStrong && (!provided || encryptionKey.length() < 32 || encryptionKey.startsWith("change_me"))) {
-            throw new IllegalStateException(
-                    "ENCRYPTION_KEY must be set to a random value of at least 32 characters "
-                    + "(generate one with: openssl rand -hex 32)");
+        boolean previousProvided = previousEncryptionKey != null && !previousEncryptionKey.isBlank();
+        if (enforceStrong) {
+            if (!strongKey(encryptionKey)) {
+                throw new IllegalStateException(
+                        "ENCRYPTION_KEY must be set to a random value of at least 32 bytes "
+                        + "(generate one with: openssl rand -hex 32)");
+            }
+            if (encryptionKey.equals(jwtSecret)) {
+                throw new IllegalStateException("ENCRYPTION_KEY must differ from JWT_SECRET");
+            }
+            if (previousProvided && !strongKey(previousEncryptionKey)) {
+                throw new IllegalStateException(
+                        "ENCRYPTION_KEY_PREVIOUS, when set, must be the previous ENCRYPTION_KEY (32+ bytes)");
+            }
         }
         // Local/test only: derive a stable dev key so no setup is needed.
         String material = provided ? encryptionKey : "better-crm/secret-crypto/v1/" + jwtSecret;
         key = new SecretKeySpec(sha256(material), "AES");
-        previousKey = (previousEncryptionKey == null || previousEncryptionKey.isBlank())
-                ? null : new SecretKeySpec(sha256(previousEncryptionKey), "AES");
+        previousKey = previousProvided ? new SecretKeySpec(sha256(previousEncryptionKey), "AES") : null;
+    }
+
+    private static boolean strongKey(String k) {
+        return k != null && !k.isBlank()
+                && k.getBytes(StandardCharsets.UTF_8).length >= 32
+                && !k.trim().toLowerCase().startsWith("change_me");
     }
 
     /** True when a stored value is still plaintext or was written under the previous key. */

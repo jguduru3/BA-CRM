@@ -33,15 +33,23 @@ public class JwtUtil {
             @Value("${app.jwt.expiration-ms}") long expirationMs,
             @Value("${app.jwt.enforce-strong-secret:true}") boolean enforceStrongSecret
     ) {
-        if (enforceStrongSecret && (secret == null || secret.length() < 32 || KNOWN_DEFAULTS.contains(secret))) {
+        if (enforceStrongSecret && !isStrong(secret)) {
             throw new IllegalStateException(
-                    "JWT_SECRET must be set to a random value of at least 32 characters "
+                    "JWT_SECRET must be set to a random value of at least 32 bytes "
                     + "(generate one with: openssl rand -hex 32)");
         }
         // Derive a full-entropy 256-bit HMAC key from the configured secret instead
         // of zero-padding short secrets (padding added no entropy at all).
         this.key = Keys.hmacShaKeyFor(sha256(secret == null ? "" : secret));
         this.expirationMs = expirationMs;
+    }
+
+    /** At least 32 bytes (256 bits of HMAC key material) and not a value that ever shipped in this repo. */
+    static boolean isStrong(String secret) {
+        return secret != null
+                && secret.getBytes(StandardCharsets.UTF_8).length >= 32
+                && !KNOWN_DEFAULTS.contains(secret.trim())
+                && !secret.trim().toLowerCase().startsWith("change_me");
     }
 
     public String generateToken(User user) {
