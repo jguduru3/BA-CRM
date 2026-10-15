@@ -31,13 +31,31 @@ public class SecretCrypto {
     private static final SecureRandom RANDOM = new SecureRandom();
 
     private static volatile SecretKeySpec key;
+    /** Decrypt-only fallback while rotating ENCRYPTION_KEY (set ENCRYPTION_KEY_PREVIOUS to the old key). */
+    private static volatile SecretKeySpec previousKey;
 
     public SecretCrypto(@Value("${app.encryption-key:}") String encryptionKey,
-                        @Value("${app.jwt.secret}") String jwtSecret) {
-        String material = (encryptionKey != null && !encryptionKey.isBlank())
-                ? encryptionKey
-                : "better-crm/secret-crypto/v1/" + jwtSecret;
+                        @Value("${app.encryption-key-previous:}") String previousEncryptionKey,
+                        @Value("${app.jwt.secret}") String jwtSecret,
+                        @Value("${app.jwt.enforce-strong-secret:true}") boolean enforceStrong) {
+        boolean provided = encryptionKey != null && !encryptionKey.isBlank();
+        if (enforceStrong && (!provided || encryptionKey.length() < 32 || encryptionKey.startsWith("change_me"))) {
+            throw new IllegalStateException(
+                    "ENCRYPTION_KEY must be set to a random value of at least 32 characters "
+                    + "(generate one with: openssl rand -hex 32)");
+        }
+        // Local/test only: derive a stable dev key so no setup is needed.
+        String material = provided ? encryptionKey : "better-crm/secret-crypto/v1/" + jwtSecret;
         key = new SecretKeySpec(sha256(material), "AES");
+        previousKey = (previousEncryptionKey == null || previousEncryptionKey.isBlank())
+                ? null : new SecretKeySpec(sha256(previousEncryptionKey), "AES");
+    }
+
+    /** True when a stored value is still plaintext or was written under the previous key. */
+    public static boolean needsReencryption(String stored) {
+        if (stored == null || stored.isEmpty()) return false;
+        if (!stored.startsWith(PREFIX)) return true;
+        return tryDecrypt(stored, key) == null && previousKey != null && tryDecrypt(stored, previousKey) != null;
     }
 
     public static String encrypt(String plaintext) {
@@ -59,24 +77,30 @@ public class SecretCrypto {
     public static String decrypt(String stored) {
         if (stored == null || !stored.startsWith(PREFIX)) return stored;
         requireKey();
+        String v = tryDecrypt(stored, key);
+        if (v == null && previousKey != null) v = tryDecrypt(stored, previousKey);
+        // Unknown key or corrupted value — surface as "not configured" rather than a 500.
+        return v;
+    }
+
+    private static String tryDecrypt(String stored, SecretKeySpec k) {
         try {
             byte[] all = Base64.getDecoder().decode(stored.substring(PREFIX.length()));
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-            cipher.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(TAG_BITS, all, 0, IV_BYTES));
+            cipher.init(Cipher.DECRYPT_MODE, k, new GCMParameterSpec(TAG_BITS, all, 0, IV_BYTES));
             byte[] pt = cipher.doFinal(all, IV_BYTES, all.length - IV_BYTES);
             return new String(pt, StandardCharsets.UTF_8);
         } catch (Exception e) {
-            // Key rotated or value corrupted — surface as "not configured" rather than a 500.
             return null;
         }
     }
 
-    /** "sk-ant-…a1b2" style hint so the UI can show which key is configured without revealing it. */
+    /** "••••1234" hint so the UI can show which secret is configured without revealing it. */
     public static String hint(String secret) {
         if (secret == null || secret.isBlank()) return null;
         String s = secret.trim();
         if (s.length() <= 8) return "••••";
-        return s.substring(0, Math.min(6, s.length() / 3)) + "…" + s.substring(s.length() - 4);
+        return "••••" + s.substring(s.length() - 4);
     }
 
     private static void requireKey() {

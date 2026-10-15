@@ -42,6 +42,13 @@ spring:
   lifecycle:
     timeout-per-shutdown-phase: 25s
 
+  data:
+    redis:
+      # Only used when app.redis.enabled=true (REDIS_ENABLED); the app runs fine without Redis.
+      url: ${REDIS_URL:redis://localhost:6379}
+      repositories:
+        enabled: false
+
 server:
   port: ${PORT:8080}
   shutdown: graceful
@@ -69,6 +76,9 @@ management:
       probes:
         enabled: true
       show-details: never
+  health:
+    redis:
+      enabled: ${REDIS_ENABLED:false}
   info:
     env:
       enabled: false
@@ -88,13 +98,23 @@ app:
   jwt:
     secret: ${JWT_SECRET:change_this_to_a_long_random_string_in_production}
     expiration-ms: ${JWT_EXPIRATION_MS:43200000}   # 12h
-    # Refuse to start with a missing/short/known-default secret (disabled only in the local profile).
+    # Refuse to start with a missing/short/known-default JWT secret or encryption
+    # key. Relaxed only in the local and test profiles.
     enforce-strong-secret: true
 
   # AES-256-GCM key for third-party secrets stored in the DB (AI keys, WhatsApp
-  # tokens, SMTP passwords, webhook secrets). Falls back to a key derived from
-  # JWT_SECRET when unset — set it explicitly in production and keep it stable.
-  encryption-key: ${APP_ENCRYPTION_KEY:}
+  # tokens, SMTP passwords, webhook secrets). Required (32+ chars) outside local/test.
+  # Keep it stable — see DEPLOYMENT.md for rotation.
+  encryption-key: ${ENCRYPTION_KEY:${APP_ENCRYPTION_KEY:}}
+  # Previous key, accepted for decryption only while rotating (DEPLOYMENT.md).
+  encryption-key-previous: ${ENCRYPTION_KEY_PREVIOUS:}
+
+  redis:
+    enabled: ${REDIS_ENABLED:false}
+
+  applicationinsights:
+    # Telemetry is attached at start-up only when this is set.
+    connection-string: ${APPLICATIONINSIGHTS_CONNECTION_STRING:}
 
   cors:
     # Comma-separated browser origins allowed to call the API cross-origin.
