@@ -1,34 +1,35 @@
 # syntax=docker/dockerfile:1.7
-# ── Stage 1: build ────────────────────────────────────────────────────────────
-# The Maven image (not a bare JDK image) — the JDK images don't ship `mvn`.
-FROM maven:3.9.9-eclipse-temurin-21-alpine AS builder
+# ── Stage 1: build with the Maven wrapper on JDK 21 ─────────────────────────
+FROM eclipse-temurin:21-jdk AS builder
 WORKDIR /build
 
-# Cache the dependency layer separately from source
-COPY pom.xml .
-RUN --mount=type=cache,target=/root/.m2 \
-    mvn -B -q dependency:go-offline || true
+# Wrapper + POM first so the dependency layer is cached independently of source.
+COPY mvnw pom.xml ./
+COPY .mvn .mvn
+RUN chmod +x mvnw
+RUN --mount=type=cache,target=/root/.m2 ./mvnw -B -q dependency:go-offline
 
 COPY src ./src
-RUN --mount=type=cache,target=/root/.m2 \
-    mvn -B -q package -DskipTests \
+RUN --mount=type=cache,target=/root/.m2 ./mvnw -B -q package -DskipTests \
  && cp target/crm-*.jar /build/app.jar
 
-# ── Stage 2: runtime ──────────────────────────────────────────────────────────
-FROM eclipse-temurin:21-jre-alpine AS runtime
+# ── Stage 2: runtime (JRE 21, non-root) ─────────────────────────────────────
+FROM eclipse-temurin:21-jre AS runtime
 WORKDIR /app
 
 # Non-root user. Pre-create the local attachment-storage directory (used when
 # Azure Blob isn't configured) owned by the app user, so a mounted named volume
 # doesn't land root-owned and unwritable.
-RUN addgroup -S crm && adduser -S crm -G crm \
-    && mkdir -p /app/data/uploads && chown -R crm:crm /app
+RUN groupadd --system crm && useradd --system --gid crm --home-dir /app --no-create-home crm \
+    && mkdir -p /app/data/uploads && chown -R crm:crm /app \
+    && apt-get update && apt-get install -y --no-install-recommends wget \
+    && rm -rf /var/lib/apt/lists/*
 USER crm
 
 COPY --from=builder --chown=crm:crm /build/app.jar app.jar
 
 ENV LOCAL_UPLOAD_DIR=/app/data/uploads \
-    JAVA_TOOL_OPTIONS="-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError -Djava.security.egd=file:/dev/./urandom"
+    JAVA_TOOL_OPTIONS="-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError"
 
 EXPOSE 8080
 

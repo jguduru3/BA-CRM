@@ -1,0 +1,105 @@
+# Azure Pipelines — build, test and package Better CRM.
+#
+# Pipeline variables (set in the pipeline's Variables UI, not here):
+#   VITE_API_URL            Frontend API base URL baked into the SPA build. Leave
+#                           empty when the SPA is served by the bundled nginx that
+#                           proxies /api (the default deployment).
+#   ACR_SERVICE_CONNECTION  Docker registry service connection name (optional — images
+#                           are only pushed on main when this is set).
+#   ACR_LOGIN_SERVER        e.g. myregistry.azurecr.io
+
+trigger:
+  branches:
+    include: [main]
+pr:
+  branches:
+    include: [main]
+
+variables:
+  MAVEN_OPTS: "-Dmaven.repo.local=$(Pipeline.Workspace)/.m2"
+  npm_config_cache: "$(Pipeline.Workspace)/.npm"
+  imageTag: "$(Build.BuildId)"
+
+stages:
+  - stage: Test
+    jobs:
+      - job: backend
+        displayName: Backend (JDK 21)
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - task: Cache@2
+            inputs:
+              key: 'maven | "$(Agent.OS)" | pom.xml'
+              path: $(Pipeline.Workspace)/.m2
+          - task: JavaToolInstaller@0
+            inputs:
+              versionSpec: "21"
+              jdkArchitectureOption: x64
+              jdkSourceOption: PreInstalled
+          - script: chmod +x mvnw && ./mvnw -B verify
+            displayName: mvnw verify (unit + MockMvc + Testcontainers PostgreSQL)
+          - task: PublishTestResults@2
+            condition: always()
+            inputs:
+              testResultsFormat: JUnit
+              testResultsFiles: |
+                target/surefire-reports/TEST-*.xml
+                target/failsafe-reports/TEST-*.xml
+
+      - job: frontend
+        displayName: Frontend (Node 20)
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - task: NodeTool@0
+            inputs:
+              versionSpec: "20.x"
+          - task: Cache@2
+            inputs:
+              key: 'npm | "$(Agent.OS)" | frontend/package-lock.json'
+              path: $(npm_config_cache)
+          - script: npm ci --no-audit --no-fund
+            workingDirectory: frontend
+            displayName: npm ci
+          - script: npm run lint
+            workingDirectory: frontend
+            displayName: Lint + typecheck
+          - script: npm test
+            workingDirectory: frontend
+            displayName: Unit tests
+          - script: npm run build
+            workingDirectory: frontend
+            displayName: Build
+            env:
+              VITE_API_URL: $(VITE_API_URL)
+
+  - stage: Images
+    dependsOn: Test
+    jobs:
+      - job: docker
+        displayName: Build Docker images
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - script: |
+              set -euo pipefail
+              DOCKER_BUILDKIT=1 docker build -t bettercrm-api:$(imageTag) .
+              DOCKER_BUILDKIT=1 docker build --build-arg VITE_API_URL="$(VITE_API_URL)" -t bettercrm-web:$(imageTag) ./frontend
+            displayName: docker build api + web
+          - task: Docker@2
+            displayName: Login to registry
+            condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'), ne(variables['ACR_SERVICE_CONNECTION'], ''))
+            inputs:
+              command: login
+              containerRegistry: $(ACR_SERVICE_CONNECTION)
+          - script: |
+              set -euo pipefail
+              for img in api web; do
+                docker tag bettercrm-$img:$(imageTag) $(ACR_LOGIN_SERVER)/bettercrm-$img:$(imageTag)
+                docker tag bettercrm-$img:$(imageTag) $(ACR_LOGIN_SERVER)/bettercrm-$img:latest
+                docker push $(ACR_LOGIN_SERVER)/bettercrm-$img:$(imageTag)
+                docker push $(ACR_LOGIN_SERVER)/bettercrm-$img:latest
+              done
+            displayName: Push images
+            condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'), ne(variables['ACR_SERVICE_CONNECTION'], ''))
