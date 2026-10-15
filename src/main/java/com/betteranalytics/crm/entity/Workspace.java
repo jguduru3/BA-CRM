@@ -30,6 +30,21 @@ public class Workspace {
     @Column(name = "is_default", nullable = false)
     private boolean isDefault = false;
 
+    /**
+     * Mirror of isDefault that the database can enforce (V40): equals
+     * organizationId on the org's single default workspace, NULL otherwise, and
+     * carries a UNIQUE index. Kept in sync automatically before every write.
+     */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    @Column(name = "default_org_id")
+    private Long defaultOrgId;
+
+    @PrePersist
+    @PreUpdate
+    void syncDefaultMirror() {
+        this.defaultOrgId = isDefault ? organizationId : null;
+    }
+
     @Column(name = "created_by")
     private Long createdBy;
 
