@@ -1,0 +1,33 @@
+# Test profile: in-memory H2 in PostgreSQL mode (one fresh DB per Spring context).
+# Postgres-specific behaviour is covered separately by PostgresMigrationIT (Testcontainers).
+spring:
+  datasource:
+    url: jdbc:h2:mem:crmtest;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  jpa:
+    database-platform: org.hibernate.dialect.H2Dialect
+
+app:
+  jwt:
+    secret: test-secret-test-secret-test-secret-0123456789
+    enforce-strong-secret: false
+  encryption-key: test-encryption-key-0123456789-0123456789
+  outbound:
+    allow-private-networks: true
+  whatsapp:
+    app-secret: test-whatsapp-app-secret
+    allow-unsigned-webhooks: false
+  campaigns:
+    scheduler-initial-delay-ms: 3600000
+  rate-limit:
+    per-ip-per-minute: 100000
+    api-key-per-minute: 100000
+  auth:
+    max-failed-logins: 5
+
+logging:
+  level:
+    root: WARN
+    com.betteranalytics: INFO

@@ -22,6 +22,9 @@
     <jjwt.version>0.12.6</jjwt.version>
     <!-- Override BOM-managed Lombok to a version that supports Java 23+ -->
     <lombok.version>1.18.42</lombok.version>
+    <bucket4j.version>8.14.0</bucket4j.version>
+    <shedlock.version>5.16.0</shedlock.version>
+    <applicationinsights.version>3.5.4</applicationinsights.version>
   </properties>
 
   <dependencies>
@@ -116,9 +119,62 @@
       <version>12.27.1</version>
     </dependency>
 
+    <!-- Login / API rate limiting (in-memory buckets; Redis-backed when enabled) -->
+    <dependency>
+      <groupId>com.bucket4j</groupId>
+      <artifactId>bucket4j_jdk17-core</artifactId>
+      <version>${bucket4j.version}</version>
+    </dependency>
+
+    <!-- Run each @Scheduled job on exactly one instance when the API is scaled out -->
+    <dependency>
+      <groupId>net.javacrumbs.shedlock</groupId>
+      <artifactId>shedlock-spring</artifactId>
+      <version>${shedlock.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>net.javacrumbs.shedlock</groupId>
+      <artifactId>shedlock-provider-jdbc-template</artifactId>
+      <version>${shedlock.version}</version>
+    </dependency>
+
+    <!-- Optional Redis (app.redis.enabled=true): shared rate limits + permission cache -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-data-redis</artifactId>
+    </dependency>
+
+    <!-- Optional Azure Application Insights: attached at start-up only when
+         APPLICATIONINSIGHTS_CONNECTION_STRING is set -->
+    <dependency>
+      <groupId>com.microsoft.azure</groupId>
+      <artifactId>applicationinsights-runtime-attach</artifactId>
+      <version>${applicationinsights.version}</version>
+    </dependency>
+
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.security</groupId>
+      <artifactId>spring-security-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-testcontainers</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>postgresql</artifactId>
       <scope>test</scope>
     </dependency>
   </dependencies>
@@ -139,6 +195,19 @@
             </path>
           </annotationProcessorPaths>
         </configuration>
+      </plugin>
+      <!-- *IT tests (Testcontainers/PostgreSQL) run in `verify`; they skip themselves without Docker -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-failsafe-plugin</artifactId>
+        <executions>
+          <execution>
+            <goals>
+              <goal>integration-test</goal>
+              <goal>verify</goal>
+            </goals>
+          </execution>
+        </executions>
       </plugin>
       <plugin>
         <groupId>org.springframework.boot</groupId>
