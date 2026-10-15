@@ -8,6 +8,7 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Tabs } from "@/components/ui/Tabs";
 import { SkeletonRows } from "@/components/ui/Skeleton";
+import { QueryError } from "@/components/ui/QueryError";
 
 const RESOURCES = [
   { value: "leads", label: "Leads", nameKey: "name" },
@@ -35,6 +36,8 @@ export default function TrashPage() {
       toast.success("Record restored");
       qc.invalidateQueries({ queryKey: ["trash", resource] });
       qc.invalidateQueries({ queryKey: [resource] });
+      // restoring a company also brings back the records its delete cascaded to
+      if (resource === "companies") ["contacts", "opportunities", "leads"].forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -45,7 +48,11 @@ export default function TrashPage() {
 
       <Tabs value={resource} onChange={setResource} tabs={RESOURCES.map((r) => ({ value: r.value, label: r.label }))} />
 
-      {list.isLoading ? (
+      {list.isError ? (
+        <div className="glass-card">
+          <QueryError error={list.error} onRetry={() => list.refetch()} title={`Couldn't load deleted ${meta.label.toLowerCase()}`} />
+        </div>
+      ) : list.isLoading ? (
         <div className="glass-card">
           <SkeletonRows rows={5} cols={3} />
         </div>

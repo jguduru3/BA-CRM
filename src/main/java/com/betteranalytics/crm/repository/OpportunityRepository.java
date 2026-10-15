@@ -2,12 +2,16 @@ package com.betteranalytics.crm.repository;
 
 import com.betteranalytics.crm.entity.Opportunity;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.transaction.annotation.Transactional;
+import java.time.Instant;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import java.util.List;
 import java.util.Optional;
 
-public interface OpportunityRepository extends JpaRepository<Opportunity, Long> {
+public interface OpportunityRepository extends JpaRepository<Opportunity, Long>, JpaSpecificationExecutor<Opportunity> {
     List<Opportunity> findByOrganizationId(Long organizationId);
 
     Optional<Opportunity> findByIdAndOrganizationId(Long id, Long organizationId);
@@ -31,4 +35,23 @@ public interface OpportunityRepository extends JpaRepository<Opportunity, Long> 
     @Query("SELECT o FROM Opportunity o WHERE o.organizationId = :orgId AND o.sourcedByUserId = :userId")
     List<Opportunity> findByOrganizationIdAndSourcedByUserId(
             @Param("orgId") Long orgId, @Param("userId") Long userId);
+
+    // ── V20+: CRM core ───────────────────────────────────────────────────────────
+
+    /** Includes soft-deleted rows: the unique index on source_lead_id covers them too. */
+    @Query(value = "SELECT * FROM opportunities WHERE source_lead_id = :leadId AND organization_id = :orgId", nativeQuery = true)
+    Optional<Opportunity> findBySourceLeadIdIncludingDeleted(@Param("leadId") Long leadId, @Param("orgId") Long orgId);
+
+    long countByOrganizationIdAndCompanyId(Long organizationId, Long companyId);
+
+    @Modifying(clearAutomatically = true)
+    @Query("UPDATE Opportunity o SET o.deletedAt = :now, o.deletedBy = :by, o.deleteReason = :reason " +
+           "WHERE o.organizationId = :orgId AND o.companyId = :companyId AND o.deletedAt IS NULL")
+    int softDeleteByCompany(@Param("orgId") Long orgId, @Param("companyId") Long companyId,
+                            @Param("now") Instant now, @Param("by") Long by, @Param("reason") String reason);
+
+    @Modifying(clearAutomatically = true)
+    @Query(value = "UPDATE opportunities SET deleted_at = NULL, deleted_by = NULL, delete_reason = NULL " +
+                   "WHERE organization_id = :orgId AND company_id = :companyId AND delete_reason = :reason", nativeQuery = true)
+    int restoreByCompany(@Param("orgId") Long orgId, @Param("companyId") Long companyId, @Param("reason") String reason);
 }

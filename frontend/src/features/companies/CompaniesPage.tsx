@@ -1,43 +1,134 @@
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Building2, Globe, Plus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import { api, ApiError } from "@/lib/api";
+import { isManagerUp, isReadOnly, useAuthStore } from "@/lib/auth";
 import { useUsersLookup } from "@/lib/hooks";
-import { useEntityCrud } from "@/lib/hooks";
-import { formatCompactCurrency } from "@/lib/format";
+import { formatCompactCurrency, formatDateTime } from "@/lib/format";
+import { toast } from "@/lib/toast";
 import type { Company } from "@/lib/types";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Avatar } from "@/components/ui/Avatar";
 import { StageBadge } from "@/components/ui/Badge";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { Column, DataTable } from "@/components/ui/DataTable";
 import { Drawer } from "@/components/ui/Drawer";
-import { SearchInput } from "@/components/ui/SearchInput";
-import { useConfirm } from "@/components/ui/ConfirmDialog";
-import { CompanyDraft, CompanyForm } from "./CompanyForm";
+import { QueryError } from "@/components/ui/QueryError";
+import { useReason } from "@/components/ui/ReasonDialog";
 import { safeHref } from "@/components/ui/SafeLink";
+import { SearchInput } from "@/components/ui/SearchInput";
+import { changedFields, ExportButton, FilterSelect, ListToolbar, saveErrorMessage } from "@/features/crm/ListParts";
+import { useServerList } from "@/features/crm/useServerList";
+import { CompanyDraft, CompanyForm, COMPANY_STATUSES } from "./CompanyForm";
 
 export default function CompaniesPage() {
-  const [search, setSearch] = useState("");
+  const [params, setParams] = useSearchParams();
+  const [status, setStatus] = useState("");
   const [selected, setSelected] = useState<Company | null>(null);
   const [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState<CompanyDraft>({});
   const users = useUsersLookup();
+  const qc = useQueryClient();
   const { confirm, node: confirmNode } = useConfirm();
+  const { askReason, node: reasonNode } = useReason();
+  const role = useAuthStore((s) => s.user?.role);
+  const readOnly = isReadOnly(role);
+  const manager = isManagerUp(role);
 
-  const { list, create, update, remove } = useEntityCrud<Company>("companies", {
-    params: { search, limit: 300 },
-    label: "Company",
+  const table = useServerList<Company>("companies", {
+    filters: { status },
+    defaultSort: { key: "name", dir: "asc" },
   });
 
   useEffect(() => {
     setDraft(selected ?? { status: "Prospect", revenue: 0 });
   }, [selected, creating]);
 
+  useEffect(() => {
+    const id = params.get("open");
+    if (!id) return;
+    api
+      .get<Company>(`/companies/${id}`)
+      .then((r) => setSelected(r.data))
+      .catch((e) => toast.error(e instanceof Error ? e.message : "Company not found"));
+    params.delete("open");
+    setParams(params, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const userName = (id: number | null) => users.data?.find((u) => u.id === id)?.name;
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ["companies"] });
+    qc.invalidateQueries({ queryKey: ["contacts"] });
+    qc.invalidateQueries({ queryKey: ["opportunities"] });
+    qc.invalidateQueries({ queryKey: ["leads"] });
+  };
+  const closeDrawers = () => {
+    setSelected(null);
+    setCreating(false);
+  };
+
+  const save = useMutation({
+    mutationFn: async () =>
+      selected
+        ? (await api.patch<Company>(`/companies/${selected.id}`, changedFields(selected, draft))).data
+        : (await api.post<Company>("/companies", draft)).data,
+    onSuccess: () => {
+      toast.success(selected ? "Company updated" : "Company created");
+      invalidate();
+      closeDrawers();
+    },
+    onError: (e: Error) => toast.error(saveErrorMessage(e, "company")),
+  });
+
+  /**
+   * Delete: the API refuses (409 HAS_CHILDREN) while contacts / deals / leads are
+   * still attached. Managers can then move everything to trash together.
+   */
+  async function deleteCompany(company: Company) {
+    const reason = await askReason({
+      title: `Move "${company.name}" to trash?`,
+      description: "It can be restored from Trash later.",
+      confirmLabel: "Move to trash",
+      danger: true,
+    });
+    if (!reason) return;
+    try {
+      await api.delete(`/companies/${company.id}`, { params: { reason } });
+      toast.success("Company moved to trash");
+      invalidate();
+      closeDrawers();
+    } catch (e) {
+      if (!(e instanceof ApiError) || e.code !== "HAS_CHILDREN") {
+        toast.error(e instanceof Error ? e.message : "Could not delete");
+        return;
+      }
+      if (!manager) {
+        toast.error(`${e.message} Ask a Manager to delete them together.`);
+        return;
+      }
+      const ok = await confirm(
+        "Delete the company and everything attached?",
+        `${e.message.replace(" Move or delete them first, or delete everything together.", "")}. They'll all go to Trash, and restoring the company brings them back.`
+      );
+      if (!ok) return;
+      try {
+        await api.delete(`/companies/${company.id}`, { params: { reason, cascade: true } });
+        toast.success("Company and its records moved to trash");
+        invalidate();
+        closeDrawers();
+      } catch (e2) {
+        toast.error(e2 instanceof Error ? e2.message : "Could not delete");
+      }
+    }
+  }
 
   const columns: Column<Company>[] = [
     {
       key: "name",
       header: "Company",
-      sortValue: (r) => r.name,
+      sortKey: "name",
       render: (r) => (
         <div className="flex items-center gap-2.5 min-w-0">
           <div
@@ -57,19 +148,21 @@ export default function CompaniesPage() {
         </div>
       ),
     },
-    { key: "status", header: "Status", sortValue: (r) => r.status, render: (r) => <StageBadge value={r.status} /> },
-    { key: "size", header: "Size", render: (r) => <span className="text-sm">{r.size ?? "—"}</span> },
-    { key: "location", header: "Location", render: (r) => <span className="text-sm">{r.location ?? "—"}</span> },
+    { key: "status", header: "Status", sortKey: "status", render: (r) => <StageBadge value={r.status} /> },
+    { key: "size", header: "Size", hideOnMobile: true, render: (r) => <span className="text-sm">{r.size ?? "—"}</span> },
+    { key: "location", header: "Location", sortKey: "location", hideOnMobile: true, render: (r) => <span className="text-sm">{r.location ?? "—"}</span> },
     {
       key: "revenue",
       header: "Revenue",
       align: "right",
-      sortValue: (r) => r.revenue ?? 0,
+      sortKey: "revenue",
+      hideOnMobile: true,
       render: (r) => <span className="text-sm font-semibold tabular-nums">{formatCompactCurrency(r.revenue)}</span>,
     },
     {
       key: "website",
       header: "Website",
+      hideOnMobile: true,
       render: (r) =>
         r.website && safeHref(r.website) ? (
           <a
@@ -91,6 +184,7 @@ export default function CompaniesPage() {
     {
       key: "owner",
       header: "Owner",
+      hideOnMobile: true,
       render: (r) =>
         r.ownerId ? (
           <div className="flex items-center gap-2">
@@ -103,62 +197,65 @@ export default function CompaniesPage() {
     },
   ];
 
-  const closeDrawers = () => {
-    setSelected(null);
-    setCreating(false);
-  };
-
-  const save = () => {
-    if (selected) {
-      update.mutate({ id: selected.id, payload: draft }, { onSuccess: closeDrawers });
-    } else {
-      create.mutate(draft, { onSuccess: closeDrawers });
-    }
-  };
+  const filtered = !!(table.search || status);
 
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
         title="Companies"
-        description={`${list.data?.count ?? 0} accounts`}
+        description={table.query.data ? `${table.total.toLocaleString()} accounts` : "The accounts your leads and deals belong to"}
         icon={<Building2 size={20} />}
         actions={
-          <button className="btn-primary" onClick={() => setCreating(true)}>
-            <Plus size={15} /> New company
-          </button>
+          <>
+            <ExportButton type="companies" />
+            {!readOnly && (
+              <button className="btn-primary" onClick={() => setCreating(true)}>
+                <Plus size={15} /> <span className="hidden sm:inline">New company</span>
+              </button>
+            )}
+          </>
         }
       />
-      <SearchInput value={search} onChange={setSearch} placeholder="Search companies…" className="max-w-xs" />
+      <ListToolbar
+        left={<FilterSelect ariaLabel="Status" allLabel="All statuses" value={status} onChange={setStatus} options={COMPANY_STATUSES} />}
+        right={<SearchInput value={table.search} onChange={table.setSearch} placeholder="Search name, industry, city…" className="w-full sm:w-72" />}
+      />
 
-      <DataTable
-        columns={columns}
-        rows={list.data?.data ?? []}
-        loading={list.isLoading}
-        onRowClick={setSelected}
-        emptyTitle="No companies yet"
-        emptyDescription="Add the accounts your leads and deals belong to."
-        emptyAction={
-          <button className="btn-primary" onClick={() => setCreating(true)}>
-            <Plus size={15} /> New company
-          </button>
-        }
-      />
+      {table.query.isError ? (
+        <div className="glass-card">
+          <QueryError error={table.query.error} onRetry={() => table.query.refetch()} title="Couldn't load companies" />
+        </div>
+      ) : (
+        <DataTable
+          columns={columns}
+          rows={table.rows}
+          loading={table.query.isLoading}
+          fetching={table.query.isFetching && !table.query.isLoading}
+          onRowClick={setSelected}
+          pagination={table.pagination}
+          sort={table.sort}
+          onSortChange={table.setSort}
+          emptyTitle={filtered ? "No companies match" : "No companies yet"}
+          emptyDescription={filtered ? "Try another search or clear the filter." : "Add the accounts your leads and deals belong to."}
+          emptyAction={
+            !filtered && !readOnly ? (
+              <button className="btn-primary" onClick={() => setCreating(true)}>
+                <Plus size={15} /> New company
+              </button>
+            ) : undefined
+          }
+        />
+      )}
 
       <Drawer
         open={!!selected || creating}
         onClose={closeDrawers}
         title={selected ? selected.name : "New company"}
+        subtitle={selected ? `Updated ${formatDateTime(selected.updatedAt)}` : "Add an account"}
         headerExtra={
-          selected && (
-            <button
-              className="btn-icon"
-              style={{ color: "var(--critical)" }}
-              title="Move to trash"
-              onClick={async () => {
-                const ok = await confirm("Delete this company?", `"${selected.name}" will be moved to trash.`);
-                if (ok) remove.mutate({ id: selected.id, reason: "Deleted from company panel" }, { onSuccess: closeDrawers });
-              }}
-            >
+          selected &&
+          manager && (
+            <button className="btn-icon" style={{ color: "var(--critical)" }} title="Move to trash" onClick={() => deleteCompany(selected)}>
               <Trash2 size={16} />
             </button>
           )
@@ -169,12 +266,15 @@ export default function CompaniesPage() {
           <button className="btn-ghost" onClick={closeDrawers}>
             Cancel
           </button>
-          <button className="btn-primary" disabled={!draft.name} onClick={save}>
-            {selected ? "Save changes" : "Create company"}
-          </button>
+          {!readOnly && (
+            <button className="btn-primary" disabled={!draft.name || save.isPending} onClick={() => save.mutate()}>
+              {save.isPending ? "Saving…" : selected ? "Save changes" : "Create company"}
+            </button>
+          )}
         </div>
       </Drawer>
       {confirmNode}
+      {reasonNode}
     </div>
   );
 }

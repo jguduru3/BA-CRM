@@ -9,6 +9,7 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { Avatar } from "@/components/ui/Avatar";
 import { StatTile } from "@/components/ui/StatTile";
 import { Skeleton } from "@/components/ui/Skeleton";
+import { QueryError } from "@/components/ui/QueryError";
 import { DonutChart } from "@/components/charts/DonutChart";
 import { HBarChart } from "@/components/charts/HBarChart";
 
@@ -57,7 +58,11 @@ export default function DashboardPage() {
       />
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        {stats.isLoading || !stats.data ? (
+        {stats.isError ? (
+          <div className="glass-card sm:col-span-2 xl:col-span-4">
+            <QueryError error={stats.error} onRetry={() => stats.refetch()} title="Couldn't load your numbers" compact />
+          </div>
+        ) : stats.isLoading || !stats.data ? (
           Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-[118px] rounded-2xl" />)
         ) : (
           <>
@@ -70,7 +75,7 @@ export default function DashboardPage() {
             />
             <StatTile
               label="Open Pipeline"
-              value={formatCompactCurrency(stats.data.totalOppValue)}
+              value={stats.data.totalOppValue == null ? "—" : formatCompactCurrency(stats.data.totalOppValue)}
               icon={TrendingUp}
               tone="brand"
             />
@@ -102,7 +107,9 @@ export default function DashboardPage() {
               View board →
             </Link>
           </div>
-          {pipeline.isLoading || !pipeline.data ? (
+          {pipeline.isError ? (
+            <QueryError error={pipeline.error} onRetry={() => pipeline.refetch()} compact />
+          ) : pipeline.isLoading || !pipeline.data ? (
             <Skeleton className="h-48" />
           ) : pipeline.data.every((r) => r.count === 0) ? (
             <p className="text-sm py-12 text-center" style={{ color: "var(--ink-muted)" }}>
@@ -120,7 +127,9 @@ export default function DashboardPage() {
           <h3 className="text-sm font-semibold mb-4" style={{ color: "var(--ink-primary)" }}>
             Lead sources
           </h3>
-          {sources.isLoading || !sources.data ? (
+          {sources.isError ? (
+            <QueryError error={sources.error} onRetry={() => sources.refetch()} compact />
+          ) : sources.isLoading || !sources.data ? (
             <Skeleton className="h-48" />
           ) : sources.data.length === 0 ? (
             <p className="text-sm py-12 text-center" style={{ color: "var(--ink-muted)" }}>
@@ -137,7 +146,9 @@ export default function DashboardPage() {
           <h3 className="text-sm font-semibold mb-4" style={{ color: "var(--ink-primary)" }}>
             Lead funnel
           </h3>
-          {funnel.isLoading || !funnel.data ? (
+          {funnel.isError ? (
+            <QueryError error={funnel.error} onRetry={() => funnel.refetch()} compact />
+          ) : funnel.isLoading || !funnel.data ? (
             <Skeleton className="h-48" />
           ) : (
             <HBarChart data={funnel.data.map((r) => ({ label: r.stage, value: r.count }))} />
@@ -148,7 +159,9 @@ export default function DashboardPage() {
           <h3 className="text-sm font-semibold mb-4" style={{ color: "var(--ink-primary)" }}>
             Team leaderboard
           </h3>
-          {team.isLoading || !team.data ? (
+          {team.isError ? (
+            <QueryError error={team.error} onRetry={() => team.refetch()} compact />
+          ) : team.isLoading || !team.data ? (
             <Skeleton className="h-48" />
           ) : team.data.length === 0 ? (
             <p className="text-sm py-12 text-center" style={{ color: "var(--ink-muted)" }}>
@@ -157,7 +170,7 @@ export default function DashboardPage() {
           ) : (
             <div className="space-y-1">
               {[...team.data]
-                .sort((a, b) => b.pipelineValue + b.wonValue - (a.pipelineValue + a.wonValue))
+                .sort((a, b) => (b.pipelineValue ?? 0) + (b.wonValue ?? 0) - ((a.pipelineValue ?? 0) + (a.wonValue ?? 0)) || b.leadsOwned - a.leadsOwned)
                 .map((rep, i) => (
                   <div key={rep.id} className="flex items-center gap-3 py-2.5 hairline border-b last:border-b-0">
                     <span className="text-xs font-bold w-4 text-center" style={{ color: "var(--ink-muted)" }}>

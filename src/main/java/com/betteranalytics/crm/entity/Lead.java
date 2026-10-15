@@ -1,6 +1,7 @@
 package com.betteranalytics.crm.entity;
 
 import jakarta.persistence.*;
+import org.hibernate.annotations.DynamicUpdate;
 import org.hibernate.annotations.SQLRestriction;
 import lombok.Getter;
 import lombok.Setter;
@@ -12,6 +13,7 @@ import java.time.Instant;
 // Deliberately bypassed only by the native-SQL trash/restore queries
 // in the matching repository, which is the one place that SHOULD see them.
 @SQLRestriction("deleted_at IS NULL")
+@DynamicUpdate
 @Entity
 @Table(name = "leads")
 @Getter
@@ -132,4 +134,14 @@ public class Lead {
 
     @Column(name = "delete_reason", length = 500)
     private String deleteReason;
+
+    // V20 — optimistic locking: leads are edited by users and background jobs.
+    // Clients echo it back on update; a stale value is answered with 409 STALE_UPDATE.
+    @Version
+    @Column(name = "version", nullable = false)
+    private Long version;
+
+    // V20 — when the owner was told this lead's follow-up is overdue (once per date).
+    @Column(name = "follow_up_notified_at")
+    private Instant followUpNotifiedAt;
 }

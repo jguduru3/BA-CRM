@@ -1,18 +1,42 @@
+import { RotateCcw } from "lucide-react";
 import { useCompaniesLookup, useUsersLookup } from "@/lib/hooks";
-import type { Opportunity } from "@/lib/types";
 import { Field, FieldGrid, SectionTitle } from "@/components/ui/Field";
+import type { OpportunityRecord } from "@/features/crm/types";
 
 export const OPP_STAGES = ["Qualification", "Proposal", "Negotiation", "Verbal Commit", "Won", "Lost"];
 export const PROPOSAL_STATUSES = ["Not Sent", "Sent", "Viewed", "Revised"];
 export const NEGOTIATION_STATUSES = ["Not Started", "In Progress", "Final Offer", "Agreed"];
 export const PO_STATUSES = ["Not Requested", "Requested", "Received", "Payment Pending", "Paid"];
 
-export type OppDraft = Partial<Opportunity>;
+export type OppDraft = Partial<OpportunityRecord>;
 
-export function OpportunityForm({ value, onChange }: { value: OppDraft; onChange: (patch: OppDraft) => void }) {
+export function OpportunityForm({
+  value,
+  onChange,
+  canEditProbability,
+  canEditPoStatus,
+  stageDefault,
+  valueHidden,
+}: {
+  value: OppDraft;
+  onChange: (patch: OppDraft) => void;
+  /** Manager+ may set probability by hand (which marks the deal as overridden). */
+  canEditProbability: boolean;
+  canEditPoStatus: boolean;
+  /** The organisation's default probability for the selected stage. */
+  stageDefault?: number;
+  /** The reader's role can't see deal value / probability (Inside Sales). */
+  valueHidden?: boolean;
+}) {
   const users = useUsersLookup();
   const companies = useCompaniesLookup();
-  const set = <K extends keyof Opportunity>(k: K, v: Opportunity[K]) => onChange({ [k]: v } as OppDraft);
+  const set = <K extends keyof OpportunityRecord>(k: K, v: OpportunityRecord[K]) => onChange({ [k]: v } as OppDraft);
+  const overridden = !!value.probabilityOverridden;
+  const probabilityHint = valueHidden
+    ? "Hidden for your role"
+    : overridden
+    ? "Set by hand — stage changes keep it"
+    : `Automatic from the stage${stageDefault != null ? ` (${stageDefault}%)` : ""}`;
 
   return (
     <div className="space-y-5">
@@ -24,7 +48,7 @@ export function OpportunityForm({ value, onChange }: { value: OppDraft; onChange
           <select
             className="select"
             value={value.companyId ?? ""}
-            onChange={(e) => set("companyId", e.target.value ? Number(e.target.value) : (null as never))}
+            onChange={(e) => set("companyId", e.target.value ? Number(e.target.value) : null)}
           >
             <option value="">— None —</option>
             {companies.data?.data.map((c) => (
@@ -38,9 +62,9 @@ export function OpportunityForm({ value, onChange }: { value: OppDraft; onChange
           <select
             className="select"
             value={value.ownerId ?? ""}
-            onChange={(e) => set("ownerId", e.target.value ? Number(e.target.value) : (null as never))}
+            onChange={(e) => set("ownerId", e.target.value ? Number(e.target.value) : null)}
           >
-            <option value="">— Unassigned —</option>
+            <option value="">— Me —</option>
             {users.data?.map((u) => (
               <option key={u.id} value={u.id}>
                 {u.name}
@@ -48,34 +72,48 @@ export function OpportunityForm({ value, onChange }: { value: OppDraft; onChange
             ))}
           </select>
         </Field>
-        <Field label="Stage">
+        <Field label="Stage" hint={value.stage === "Won" || value.stage === "Lost" ? "You'll be asked for the reason" : undefined}>
           <select className="select" value={value.stage ?? "Qualification"} onChange={(e) => set("stage", e.target.value)}>
             {OPP_STAGES.map((s) => (
               <option key={s}>{s}</option>
             ))}
           </select>
         </Field>
-        <Field label="Probability (%)">
-          <input
-            className="input"
-            type="number"
-            min={0}
-            max={100}
-            value={value.probability ?? 50}
-            onChange={(e) => set("probability", Number(e.target.value))}
-          />
+        <Field label="Win probability (%)" hint={probabilityHint}>
+          <div className="flex items-center gap-1.5">
+            <input
+              className="input"
+              type="number"
+              min={0}
+              max={100}
+              disabled={!canEditProbability || valueHidden}
+              value={valueHidden ? "" : overridden ? value.probability ?? "" : stageDefault ?? value.probability ?? ""}
+              onChange={(e) => onChange({ probability: Number(e.target.value), probabilityOverridden: true })}
+            />
+            {canEditProbability && overridden && (
+              <button
+                type="button"
+                className="btn-icon shrink-0"
+                title="Back to the stage default"
+                onClick={() => onChange({ probabilityOverridden: false, probability: stageDefault ?? value.probability })}
+              >
+                <RotateCcw size={15} />
+              </button>
+            )}
+          </div>
         </Field>
-        <Field label="Deal value (₹)">
+        <Field label="Deal value (₹)" hint={valueHidden ? "Hidden for your role" : undefined}>
           <input
             className="input"
             type="number"
             min={0}
-            value={value.value ?? 0}
+            disabled={valueHidden}
+            value={valueHidden ? "" : value.value ?? 0}
             onChange={(e) => set("value", Number(e.target.value))}
           />
         </Field>
         <Field label="Expected close date">
-          <input className="input" type="date" value={value.closeDate ?? ""} onChange={(e) => set("closeDate", e.target.value)} />
+          <input className="input" type="date" value={value.closeDate ?? ""} onChange={(e) => set("closeDate", e.target.value || null)} />
         </Field>
       </FieldGrid>
 
@@ -106,8 +144,13 @@ export function OpportunityForm({ value, onChange }: { value: OppDraft; onChange
             ))}
           </select>
         </Field>
-        <Field label="PO / payment status" hint="Manager and above only" className="sm:col-span-2">
-          <select className="select" value={value.poStatus ?? ""} onChange={(e) => set("poStatus", e.target.value)}>
+        <Field label="PO / payment status" hint={canEditPoStatus ? undefined : "Confirmed by a Manager"} className="sm:col-span-2">
+          <select
+            className="select"
+            disabled={!canEditPoStatus}
+            value={value.poStatus ?? ""}
+            onChange={(e) => set("poStatus", e.target.value)}
+          >
             <option value="">—</option>
             {PO_STATUSES.map((s) => (
               <option key={s}>{s}</option>

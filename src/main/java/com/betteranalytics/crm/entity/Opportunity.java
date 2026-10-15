@@ -1,6 +1,7 @@
 package com.betteranalytics.crm.entity;
 
 import jakarta.persistence.*;
+import org.hibernate.annotations.DynamicUpdate;
 import org.hibernate.annotations.SQLRestriction;
 import lombok.Getter;
 import lombok.Setter;
@@ -13,6 +14,7 @@ import java.time.LocalDate;
 // Deliberately bypassed only by the native-SQL trash/restore queries
 // in the matching repository, which is the one place that SHOULD see them.
 @SQLRestriction("deleted_at IS NULL")
+@DynamicUpdate
 @Entity
 @Table(name = "opportunities")
 @Getter
@@ -96,4 +98,21 @@ public class Opportunity {
 
     @Column(name = "delete_reason", length = 500)
     private String deleteReason;
+
+    // V20 — optimistic locking (see Lead.version).
+    @Version
+    @Column(name = "version", nullable = false)
+    private Long version;
+
+    // V20 — true when a Manager set the probability by hand; stage changes then
+    // keep it instead of applying the organisation's stage default.
+    @Column(name = "probability_overridden", nullable = false)
+    private boolean probabilityOverridden = false;
+
+    // V20 — mandatory reason when a deal moves to Won or Lost, and when that happened.
+    @Column(name = "close_reason", length = 500)
+    private String closeReason;
+
+    @Column(name = "closed_at")
+    private Instant closedAt;
 }
