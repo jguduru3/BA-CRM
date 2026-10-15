@@ -19,6 +19,7 @@ import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.firewall.RequestRejectedHandler;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
 import org.springframework.security.web.header.writers.StaticHeadersWriter;
@@ -108,6 +109,19 @@ public class SecurityConfig {
             .addFilterBefore(apiKeyAuthFilter, UsernamePasswordAuthenticationFilter.class)
             .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
         return http.build();
+    }
+
+    /**
+     * StrictHttpFirewall rejects malformed or suspicious URLs ("..", encoded
+     * slashes, ";" path parameters, ...) before any filter runs. Spring's default
+     * handler answers with a bare 400/500 from the servlet container; this one
+     * answers with the same {"error","code","requestId"} JSON as every other
+     * error, and never echoes the offending URL back.
+     */
+    @Bean
+    public RequestRejectedHandler requestRejectedHandler() {
+        return (request, response, ex) ->
+                JsonErrors.write(response, 400, "REQUEST_REJECTED", "The request URL was rejected as malformed.");
     }
 
     /**
