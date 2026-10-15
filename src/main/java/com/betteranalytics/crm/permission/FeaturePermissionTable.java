@@ -256,10 +256,98 @@ final class FeaturePermissionTable {
                 Role.SUPER_ADMIN, Role.VP_SALES, Role.MANAGER, Role.EXECUTIVE, Role.INSIDE_SALES, Role.FIELD_SALES, Role.SUPPORT);
         rule(Scope.ORG, Action.EDIT, ResourceType.DEPARTMENT, Role.SUPER_ADMIN);
         rule(Scope.ORG, Action.DELETE, ResourceType.DEPARTMENT, Role.SUPER_ADMIN);
+
+        // ── Workspace tools (V13+). Not in the PDF; defaults chosen to match
+        // what the navigation already implies. OWN = creator/owner of the row.
+        Role[] sales = {Role.SUPER_ADMIN, Role.VP_SALES, Role.MANAGER, Role.EXECUTIVE, Role.INSIDE_SALES, Role.FIELD_SALES};
+        Role[] reps = {Role.EXECUTIVE, Role.INSIDE_SALES, Role.FIELD_SALES};
+        Role[] managerUp = {Role.SUPER_ADMIN, Role.VP_SALES, Role.MANAGER};
+        Role[] everyone = {Role.SUPER_ADMIN, Role.VP_SALES, Role.MANAGER, Role.EXECUTIVE, Role.INSIDE_SALES, Role.FIELD_SALES, Role.SUPPORT};
+
+        // PROJECT — anyone in sales can start one; owner (or Manager+) changes it.
+        rule(Scope.ORG, Action.CREATE, ResourceType.PROJECT, sales);
+        rule(Scope.ORG, Action.VIEW, ResourceType.PROJECT, everyone);
+        rule(Scope.ORG, Action.EDIT, ResourceType.PROJECT, managerUp);
+        rule(Scope.OWN, Action.EDIT, ResourceType.PROJECT, reps);
+        rule(Scope.ORG, Action.DELETE, ResourceType.PROJECT, managerUp);
+        rule(Scope.OWN, Action.DELETE, ResourceType.PROJECT, reps);
+
+        // TODO lists are personal (sharing is handled by the controller on top of OWN).
+        rule(Scope.OWN, Action.CREATE, ResourceType.TODO, sales);
+        rule(Scope.OWN, Action.VIEW, ResourceType.TODO, everyone);
+        rule(Scope.OWN, Action.EDIT, ResourceType.TODO, sales);
+        rule(Scope.OWN, Action.DELETE, ResourceType.TODO, sales);
+
+        // CALENDAR_EVENT — Manager+ see/manage everyone's calendar; others their own.
+        rule(Scope.ORG, Action.CREATE, ResourceType.CALENDAR_EVENT, sales);
+        rule(Scope.ORG, Action.VIEW, ResourceType.CALENDAR_EVENT, managerUp);
+        rule(Scope.OWN, Action.VIEW, ResourceType.CALENDAR_EVENT, Role.EXECUTIVE, Role.INSIDE_SALES, Role.FIELD_SALES, Role.SUPPORT);
+        rule(Scope.ORG, Action.EDIT, ResourceType.CALENDAR_EVENT, managerUp);
+        rule(Scope.OWN, Action.EDIT, ResourceType.CALENDAR_EVENT, reps);
+        rule(Scope.ORG, Action.DELETE, ResourceType.CALENDAR_EVENT, managerUp);
+        rule(Scope.OWN, Action.DELETE, ResourceType.CALENDAR_EVENT, reps);
+
+        // REMINDER — strictly personal.
+        rule(Scope.OWN, Action.CREATE, ResourceType.REMINDER, sales);
+        rule(Scope.OWN, Action.VIEW, ResourceType.REMINDER, everyone);
+        rule(Scope.OWN, Action.DELETE, ResourceType.REMINDER, sales);
+
+        // CONTACT_CATEGORY — shared taxonomy, curated by Manager+.
+        rule(Scope.ORG, Action.VIEW, ResourceType.CONTACT_CATEGORY, everyone);
+        rule(Scope.ORG, Action.CREATE, ResourceType.CONTACT_CATEGORY, managerUp);
+        rule(Scope.ORG, Action.EDIT, ResourceType.CONTACT_CATEGORY, managerUp);
+        rule(Scope.ORG, Action.DELETE, ResourceType.CONTACT_CATEGORY, managerUp);
+
+        // WHITEBOARD — collaborative: any sales role edits; creator or Manager+ deletes.
+        rule(Scope.ORG, Action.CREATE, ResourceType.WHITEBOARD, sales);
+        rule(Scope.ORG, Action.VIEW, ResourceType.WHITEBOARD, everyone);
+        rule(Scope.ORG, Action.EDIT, ResourceType.WHITEBOARD, sales);
+        rule(Scope.ORG, Action.DELETE, ResourceType.WHITEBOARD, managerUp);
+        rule(Scope.OWN, Action.DELETE, ResourceType.WHITEBOARD, reps);
+
+        // TEAM rosters drive TEAM-scope permissions, so only VP / Super Admin change them;
+        // Manager+ can see them (matches the Teams menu item).
+        rule(Scope.ORG, Action.VIEW, ResourceType.TEAM, managerUp);
+        rule(Scope.ORG, Action.CREATE, ResourceType.TEAM, Role.SUPER_ADMIN, Role.VP_SALES);
+        rule(Scope.ORG, Action.EDIT, ResourceType.TEAM, Role.SUPER_ADMIN, Role.VP_SALES);
+        rule(Scope.ORG, Action.DELETE, ResourceType.TEAM, Role.SUPER_ADMIN, Role.VP_SALES);
+
+        // WHATSAPP — CREATE = send a message, VIEW = conversation metadata (bodies are a
+        // field mask: PermissionService.canViewWhatsAppBody), EDIT/DELETE = sender accounts.
+        rule(Scope.ORG, Action.CREATE, ResourceType.WHATSAPP, sales);
+        rule(Scope.ORG, Action.VIEW, ResourceType.WHATSAPP, everyone);
+        rule(Scope.ORG, Action.EDIT, ResourceType.WHATSAPP, Role.SUPER_ADMIN, Role.VP_SALES);
+        rule(Scope.ORG, Action.DELETE, ResourceType.WHATSAPP, Role.SUPER_ADMIN, Role.VP_SALES);
+
+        // AI_AUTOMATION — Manager+; EMAIL_ACCOUNT holds credentials, VP / Super Admin only.
+        rule(Scope.ORG, Action.VIEW, ResourceType.AI_AUTOMATION, managerUp);
+        rule(Scope.ORG, Action.CREATE, ResourceType.AI_AUTOMATION, managerUp);
+        rule(Scope.ORG, Action.EDIT, ResourceType.AI_AUTOMATION, managerUp);
+        rule(Scope.ORG, Action.DELETE, ResourceType.AI_AUTOMATION, managerUp);
+        rule(Scope.ORG, Action.VIEW, ResourceType.EMAIL_ACCOUNT, Role.SUPER_ADMIN, Role.VP_SALES);
+        rule(Scope.ORG, Action.CREATE, ResourceType.EMAIL_ACCOUNT, Role.SUPER_ADMIN, Role.VP_SALES);
+        rule(Scope.ORG, Action.DELETE, ResourceType.EMAIL_ACCOUNT, Role.SUPER_ADMIN, Role.VP_SALES);
+
+        // AUDIT_LOG — whole org for VP / Super Admin, own team (reporting tree) for Managers.
+        rule(Scope.ORG, Action.VIEW, ResourceType.AUDIT_LOG, Role.SUPER_ADMIN, Role.VP_SALES);
+        rule(Scope.TEAM, Action.VIEW, ResourceType.AUDIT_LOG, Role.MANAGER);
+
+        // INTEGRATION — API keys / webhooks: Super Admin only.
+        for (Action a : Action.values()) rule(Scope.ORG, a, ResourceType.INTEGRATION, Role.SUPER_ADMIN);
     }
 
-    /** Fails closed: any (role, action, resource) not explicitly listed above is Scope.NONE. */
+    /**
+     * Fails closed: any (role, action, resource) not explicitly listed above is Scope.NONE.
+     *
+     * SUPPORT is read-only everywhere — enforced here, centrally, so no rule above
+     * can accidentally grant it a write. The one exception is its own notification
+     * inbox (marking items read is personal state, not CRM data).
+     */
     static Scope lookup(Role role, Action action, ResourceType resource) {
+        if (role == Role.SUPPORT && action != Action.VIEW
+                && !(resource == ResourceType.NOTIFICATION && action == Action.EDIT)) {
+            return Scope.NONE;
+        }
         return RULES.getOrDefault(new Key(role, action, resource), Scope.NONE);
     }
 }

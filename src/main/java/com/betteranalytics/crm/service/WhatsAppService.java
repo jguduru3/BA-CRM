@@ -19,6 +19,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.task.TaskRejectedException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.*;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -573,6 +574,7 @@ public class WhatsAppService {
      */
     @Scheduled(fixedDelayString = "${app.campaigns.scheduler-delay-ms:60000}",
                initialDelayString = "${app.campaigns.scheduler-initial-delay-ms:30000}")
+    @SchedulerLock(name = "campaigns.runDue", lockAtMostFor = "PT10M")
     public void runDueCampaigns() {
         try {
             Instant now = Instant.now();

@@ -4,6 +4,7 @@ import com.betteranalytics.crm.entity.Reminder;
 import com.betteranalytics.crm.repository.ReminderRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -42,6 +43,7 @@ public class ReminderSchedulerService {
     }
 
     @Scheduled(fixedDelay = 60_000)
+    @SchedulerLock(name = "reminders.fire", lockAtMostFor = "PT5M")
     public void fireReminders() {
         List<Reminder> due = reminderRepo.findPendingDue(Instant.now(), BATCH_SIZE);
         if (due.isEmpty()) return;

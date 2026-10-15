@@ -41,5 +41,10 @@ public enum ResourceType {
     REMINDER,
     PROJECT,
     AI_AUTOMATION,
-    EMAIL_ACCOUNT
+    EMAIL_ACCOUNT,
+    WHITEBOARD,
+    TEAM,
+    WHATSAPP,
+    AUDIT_LOG,
+    INTEGRATION
 }
