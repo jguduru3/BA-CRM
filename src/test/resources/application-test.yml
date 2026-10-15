@@ -21,6 +21,8 @@ app:
     allow-unsigned-webhooks: false
   campaigns:
     scheduler-initial-delay-ms: 3600000
+  automations:
+    scheduler-initial-delay-ms: 3600000
   rate-limit:
     per-ip-per-minute: 100000
     api-key-per-minute: 100000

@@ -1,13 +1,10 @@
 package com.betteranalytics.crm.service;
 
 import com.betteranalytics.crm.config.IntegrationAsyncConfig;
-import com.betteranalytics.crm.config.IntegrationAsyncConfig.IntegrationExecutor;
-import com.betteranalytics.crm.entity.Campaign;
-import com.betteranalytics.crm.entity.CampaignContact;
 import com.betteranalytics.crm.entity.WhatsAppAccount;
+import com.betteranalytics.crm.entity.WhatsAppConsent;
 import com.betteranalytics.crm.entity.WhatsAppMessage;
 import com.betteranalytics.crm.repository.CampaignContactRepository;
-import com.betteranalytics.crm.repository.CampaignRepository;
 import com.betteranalytics.crm.repository.WhatsAppAccountRepository;
 import com.betteranalytics.crm.repository.WhatsAppMessageRepository;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -16,14 +13,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.core.task.TaskRejectedException;
-import org.springframework.data.domain.PageRequest;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.http.*;
-import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
@@ -37,12 +29,16 @@ import java.util.*;
 import java.util.regex.Pattern;
 
 /**
- * Thin wrapper around Meta's WhatsApp Cloud API (Graph API v19.0), plus
- * webhook processing and background campaign dispatch.
+ * Thin wrapper around Meta's WhatsApp Cloud API (Graph API v19.0) plus webhook
+ * processing. Campaign dispatch lives in {@link CampaignDispatcher}.
+ *
+ * Nothing here runs inside a DB transaction: every Graph API call happens
+ * first (5s connect / 30s read timeout) and the resulting row is then saved
+ * by the repository in its own short transaction.
  *
  * To wire up: set WHATSAPP_GRAPH_URL (default https://graph.facebook.com/v19.0),
- * WHATSAPP_APP_SECRET (used to verify X-Hub-Signature-256 on webhooks) and
- * configure a WhatsAppAccount row with the org's credentials.
+ * WHATSAPP_APP_SECRET (verifies X-Hub-Signature-256 on webhooks) and add one
+ * or more WhatsAppAccount rows (sender numbers) per organization.
  */
 @Service
 public class WhatsAppService {
@@ -56,20 +52,17 @@ public class WhatsAppService {
     private static final Pattern TEMPLATE_NAME = Pattern.compile("^[A-Za-z0-9_]{1,100}$");
     private static final Pattern PHONE_NUMBER_ID = Pattern.compile("^[A-Za-z0-9_-]{1,100}$");
     private static final Set<String> STATUS_EVENTS = Set.of("sent", "delivered", "read", "failed");
-    private static final int DISPATCH_BATCH = 100;
     public static final String DEFAULT_LANGUAGE = "en_US";
 
     private final WhatsAppAccountRepository  accountRepo;
     private final WhatsAppMessageRepository  messageRepo;
-    private final CampaignRepository         campaignRepo;
     private final CampaignContactRepository  contactRepo;
     private final RestTemplate               restTemplate;
     private final ObjectMapper               objectMapper;
     private final NotificationService        notificationService;
-    private final IntegrationExecutor        executor;
-
-    /** Campaign ids with a dispatch worker running in this JVM (per-contact claim guards across JVMs). */
-    private final Set<Long> dispatching = Collections.synchronizedSet(new HashSet<>());
+    private final WhatsAppConsentService     consentService;
+    private final WhatsAppRecordResolver     recordResolver;
+    private final CampaignDispatcher         campaignDispatcher;
 
     @Value("${app.whatsapp.graph-url:https://graph.facebook.com/v19.0}")
     private String graphUrl;
@@ -82,18 +75,20 @@ public class WhatsAppService {
 
     public WhatsAppService(WhatsAppAccountRepository accountRepo,
                            WhatsAppMessageRepository messageRepo,
-                           CampaignRepository campaignRepo,
                            CampaignContactRepository contactRepo,
                            NotificationService notificationService,
-                           ObjectMapper objectMapper,
-                           IntegrationExecutor executor) {
+                           WhatsAppConsentService consentService,
+                           WhatsAppRecordResolver recordResolver,
+                           @Lazy CampaignDispatcher campaignDispatcher,
+                           ObjectMapper objectMapper) {
         this.accountRepo = accountRepo;
         this.messageRepo = messageRepo;
-        this.campaignRepo = campaignRepo;
         this.contactRepo = contactRepo;
         this.notificationService = notificationService;
+        this.consentService = consentService;
+        this.recordResolver = recordResolver;
+        this.campaignDispatcher = campaignDispatcher;
         this.objectMapper = objectMapper;
-        this.executor = executor;
         this.restTemplate = IntegrationAsyncConfig.outboundRestTemplate(5_000, 30_000);
     }
 
@@ -145,13 +140,12 @@ public class WhatsAppService {
 
     // ── Sending ──────────────────────────────────────────────────────────────
 
-    /**
-     * Send a free-form text message to a phone number (E.164).
-     */
+    /** Free-form text to a number. Opted-out numbers → IllegalStateException (409), nothing is sent. */
     public WhatsAppMessage sendText(Long orgId, Long accountId, String toPhone, String text,
-                                     String relatedType, Long relatedId, Long sentBy) {
+                                    String relatedType, Long relatedId, Long sentBy) {
         WhatsAppAccount account = requireActiveAccount(orgId, accountId);
         String phone = normalizePhone(toPhone);
+        consentService.requireNotOptedOut(orgId, PhoneNumbers.normalize(phone));
 
         Map<String, Object> payload = Map.of(
                 "messaging_product", "whatsapp",
@@ -160,20 +154,27 @@ public class WhatsAppService {
                 "type", "text",
                 "text", Map.of("preview_url", false, "body", text)
         );
-
         return doSend(account, phone, "text", text, null, null, payload, relatedType, relatedId, sentBy, null);
     }
 
-    /**
-     * Send an approved template message. components is the JSON array of parameter objects.
-     */
+    /** Approved template to a number. Opted-out numbers → IllegalStateException (409). */
     public WhatsAppMessage sendTemplate(Long orgId, Long accountId, String toPhone,
-                                         String templateName, String language,
-                                         List<Map<String, Object>> components,
-                                         String relatedType, Long relatedId, Long sentBy) {
+                                        String templateName, String language,
+                                        List<Map<String, Object>> components,
+                                        String relatedType, Long relatedId, Long sentBy) {
         WhatsAppAccount account = requireActiveAccount(orgId, accountId);
-        return sendTemplate(account, normalizePhone(toPhone), validateTemplateName(templateName),
+        String phone = normalizePhone(toPhone);
+        consentService.requireNotOptedOut(orgId, PhoneNumbers.normalize(phone));
+        return sendTemplate(account, phone, validateTemplateName(templateName),
                 validateLanguage(language), components, relatedType, relatedId, sentBy, null);
+    }
+
+    /** Campaign path: consent was already checked by the dispatcher for this recipient. */
+    WhatsAppMessage sendCampaignTemplate(WhatsAppAccount account, String phone, String templateName,
+                                         String language, List<Map<String, Object>> components,
+                                         Long campaignId) {
+        return sendTemplate(account, phone, templateName, language, components,
+                "Campaign", campaignId, null, campaignId);
     }
 
     private WhatsAppMessage sendTemplate(WhatsAppAccount account, String phone, String templateName,
@@ -195,28 +196,30 @@ public class WhatsAppService {
         if (components != null) {
             try { paramsJson = objectMapper.writeValueAsString(components); } catch (Exception ignored) {}
         }
-
         return doSend(account, phone, "template", null, templateName, paramsJson, payload,
                 relatedType, relatedId, sentBy, campaignId);
     }
 
-    private WhatsAppAccount requireActiveAccount(Long orgId, Long accountId) {
+    public WhatsAppAccount requireActiveAccount(Long orgId, Long accountId) {
+        if (accountId == null) throw new IllegalArgumentException("accountId is required");
         WhatsAppAccount account = accountRepo.findByIdAndOrganizationId(accountId, orgId)
                 .orElseThrow(() -> new NoSuchElementException("WhatsApp account not found"));
         if (!account.isActive()) throw new IllegalStateException("WhatsApp account is inactive");
         return account;
     }
 
+    /** HTTP call first (no transaction open), then one short save. */
     private WhatsAppMessage doSend(WhatsAppAccount account, String toPhone, String type, String body,
-                                    String templateName, String templateParams,
-                                    Map<String, Object> payload, String relatedType, Long relatedId,
-                                    Long sentBy, Long campaignId) {
+                                   String templateName, String templateParams,
+                                   Map<String, Object> payload, String relatedType, Long relatedId,
+                                   Long sentBy, Long campaignId) {
         WhatsAppMessage msg = new WhatsAppMessage();
         msg.setOrganizationId(account.getOrganizationId());
         msg.setAccountId(account.getId());
         msg.setDirection("outbound");
         msg.setType(type);
         msg.setToNumber(toPhone);
+        msg.setNormalizedPhone(PhoneNumbers.tryNormalize(toPhone));
         msg.setBody(body);
         msg.setTemplateName(templateName);
         msg.setTemplateParams(templateParams);
@@ -347,7 +350,10 @@ public class WhatsAppService {
     }
 
     /**
-     * Process a single inbound message event from the webhook payload.
+     * One inbound message. The receiving account (and so the organization) is
+     * resolved from metadata.phone_number_id. The sender is linked to the Lead /
+     * Contact with that number, so its owner can read the conversation; a bare
+     * STOP / UNSUBSCRIBE / START updates consent.
      */
     public void handleInbound(JsonNode messageNode, String phoneNumberId) {
         WhatsAppAccount account = accountRepo.findByPhoneNumberId(phoneNumberId).orElse(null);
@@ -355,43 +361,63 @@ public class WhatsAppService {
             log.warn("No active WhatsApp account for phoneNumberId={}", phoneNumberId);
             return;
         }
+        Long orgId = account.getOrganizationId();
 
         String from = messageNode.path("from").asText(null);
         String waId = messageNode.path("id").asText(null);
         String type = messageNode.path("type").asText("text");
         String body = messageNode.path("text").path("body").asText(null);
+        if (body == null) body = messageNode.path("button").path("text").asText(null);
 
         // Meta retries deliveries — never store (or notify about) the same message twice.
-        if (waId != null && messageRepo.existsByWaMessageIdAndOrganizationId(waId, account.getOrganizationId())) {
+        if (waId != null && messageRepo.existsByWaMessageIdAndOrganizationId(waId, orgId)) {
             return;
         }
 
+        String normalized = PhoneNumbers.tryNormalize(from);
+        WhatsAppRecordResolver.Link link = recordResolver.findByPhone(orgId, normalized).orElse(null);
+
         WhatsAppMessage msg = new WhatsAppMessage();
-        msg.setOrganizationId(account.getOrganizationId());
+        msg.setOrganizationId(orgId);
         msg.setAccountId(account.getId());
         msg.setDirection("inbound");
         msg.setType(truncate(type, 20));
         msg.setFromNumber(truncate(from, 30));
+        msg.setToNumber(truncate(account.getDisplayPhoneNumber(), 30));
+        msg.setNormalizedPhone(normalized);
         msg.setBody(body);
         msg.setWaMessageId(truncate(waId, 200));
         msg.setStatus("received");
+        if (link != null) {
+            msg.setRelatedType(link.relatedType());
+            msg.setRelatedId(link.relatedId());
+        }
         msg.setCreatedAt(Instant.now());
         msg.setUpdatedAt(Instant.now());
+        msg = messageRepo.save(msg);
 
-        messageRepo.save(msg);
+        String keyword = WhatsAppConsentService.keywordStatus(body);
+        if (keyword != null && normalized != null) {
+            consentService.record(orgId, normalized, keyword, WhatsAppConsentService.SOURCE_KEYWORD,
+                    "Subscriber replied \"" + truncate(body.trim(), 20) + "\"", null, msg.getId());
+        }
 
-        notificationService.createSystemNotification(
-                account.getOrganizationId(),
-                "whatsapp_reply",
-                "New WhatsApp message from " + from,
-                body != null ? truncate(body, 500) : "(media message)",
-                "WhatsAppMessage"
-        );
+        String title = keyword == null ? "New WhatsApp message from " + from
+                : WhatsAppConsent.OPTED_OUT.equals(keyword) ? "WhatsApp opt-out from " + from
+                : "WhatsApp opt-in from " + from;
+        String preview = body != null ? truncate(body, 500) : "(media message)";
+        notificationService.createSystemNotification(orgId, "whatsapp_reply", title, preview, "WhatsAppMessage");
+        if (link != null && link.ownerId() != null) {
+            notificationService.notify(orgId, link.ownerId(), "whatsapp_reply", title, preview,
+                    link.relatedType(), link.relatedId());
+        }
     }
 
     /**
-     * Update delivery/read status from a webhook status event — scoped to the
-     * organization that owns the receiving phone number.
+     * Delivery status (sent → delivered → read, or failed) from a status webhook,
+     * scoped to the organization that owns the receiving phone number. Updates
+     * the message row and, for campaign sends, the recipient row (compare-and-set
+     * on the current status, so it never races the dispatcher).
      */
     public void handleStatusUpdate(JsonNode statusNode, String phoneNumberId) {
         String waId   = statusNode.path("id").asText(null);
@@ -406,6 +432,8 @@ public class WhatsAppService {
         messageRepo.findFirstByWaMessageIdAndOrganizationId(waId, orgId).ifPresent(msg -> {
             if (!advances(msg.getStatus(), status)) return;
             msg.setStatus(status);
+            if (("delivered".equals(status) || "read".equals(status)) && msg.getDeliveredAt() == null) msg.setDeliveredAt(now);
+            if ("read".equals(status) && msg.getReadAt() == null) msg.setReadAt(now);
             if ("failed".equals(status)) {
                 JsonNode err = statusNode.path("errors").path(0);
                 if (!err.isMissingNode()) {
@@ -419,21 +447,17 @@ public class WhatsAppService {
 
         contactRepo.findFirstByWaMessageIdAndOrganizationId(waId, orgId).ifPresent(cc -> {
             if (!advances(cc.getStatus(), status)) return;
-            cc.setStatus(status);
-            if ("delivered".equals(status) || "read".equals(status)) {
-                if (cc.getDeliveredAt() == null) cc.setDeliveredAt(now);
-            }
-            if ("read".equals(status) && cc.getReadAt() == null) cc.setReadAt(now);
-            if ("failed".equals(status)) {
-                cc.setFailedReason(truncate(statusNode.path("errors").path(0).path("title").asText("Delivery failed"), 300));
-            }
-            contactRepo.save(cc);
-            refreshCampaignCounts(cc.getCampaignId());
+            String reason = "failed".equals(status)
+                    ? truncate(statusNode.path("errors").path(0).path("title").asText("Delivery failed"), 300) : null;
+            int updated = contactRepo.advanceDeliveryStatus(cc.getId(), cc.getStatus(), status,
+                    ("delivered".equals(status) || "read".equals(status)) ? now : null,
+                    "read".equals(status) ? now : null, reason, now);
+            if (updated == 1) campaignDispatcher.refreshCounts(cc.getCampaignId());
         });
     }
 
     /** Status only moves forward (webhooks can arrive out of order). */
-    private static boolean advances(String current, String next) {
+    static boolean advances(String current, String next) {
         int cur = rank(current);
         if ("failed".equals(next)) return cur < rank("delivered");
         return rank(next) > cur;
@@ -448,151 +472,6 @@ public class WhatsAppService {
             case "failed" -> 4;
             default -> 0;   // pending | sending | received
         };
-    }
-
-    // ── Campaign dispatch ────────────────────────────────────────────────────
-
-    /**
-     * Queue a background dispatch of a running WhatsApp campaign. Inside a
-     * transaction the job is submitted after commit so the worker sees the
-     * new status; if the bounded queue is full the scheduler retries later.
-     */
-    public void dispatchCampaignAsync(Long campaignId) {
-        Runnable submit = () -> {
-            try {
-                executor.submit("campaign-dispatch-" + campaignId, () -> dispatchCampaign(campaignId));
-            } catch (TaskRejectedException e) {
-                log.warn("Campaign {} dispatch deferred — executor queue full; scheduler will retry", campaignId);
-            }
-        };
-        if (TransactionSynchronizationManager.isSynchronizationActive()) {
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override public void afterCommit() { submit.run(); }
-            });
-        } else {
-            submit.run();
-        }
-    }
-
-    /** Sends to every pending recipient while the campaign stays running. */
-    void dispatchCampaign(Long campaignId) {
-        if (!dispatching.add(campaignId)) return;   // already being dispatched in this JVM
-        try {
-            Campaign c = campaignRepo.findById(campaignId).orElse(null);
-            if (c == null || !"running".equals(c.getStatus()) || !"whatsapp".equals(c.getType())) return;
-
-            WhatsAppAccount account = resolveAccount(c);
-            if (account == null || !account.isActive()) {
-                log.warn("Campaign {} has no active WhatsApp account; recipients left pending", campaignId);
-                return;
-            }
-            List<Map<String, Object>> components;
-            String language;
-            String templateName;
-            try {
-                components = parseTemplateComponents(c.getTemplateParams());
-                language = validateLanguage(c.getTemplateLanguage());
-                templateName = validateTemplateName(c.getTemplateName());
-            } catch (IllegalArgumentException e) {
-                log.warn("Campaign {} has invalid template settings: {}", campaignId, e.getMessage());
-                return;
-            }
-
-            int sinceCheck = 0;
-            outer:
-            while (true) {
-                List<CampaignContact> batch = contactRepo.findByCampaignIdAndStatusOrderByIdAsc(
-                        campaignId, "pending", PageRequest.of(0, DISPATCH_BATCH));
-                if (batch.isEmpty()) break;
-                for (CampaignContact cc : batch) {
-                    // Honour pause/cancel promptly without a query per recipient.
-                    if (sinceCheck++ % 20 == 0
-                            && !"running".equals(campaignRepo.findStatusById(campaignId).orElse(null))) {
-                        break outer;
-                    }
-                    if (contactRepo.claimForSending(cc.getId()) != 1) continue;   // someone else took it
-                    sendToContact(c, account, templateName, language, components, cc);
-                }
-            }
-        } finally {
-            dispatching.remove(campaignId);
-            refreshCampaignCounts(campaignId);
-            completeIfDone(campaignId);
-        }
-    }
-
-    private void sendToContact(Campaign c, WhatsAppAccount account, String templateName, String language,
-                               List<Map<String, Object>> components, CampaignContact cc) {
-        try {
-            if (!isValidPhone(cc.getPhoneNumber())) {
-                cc.setStatus("failed");
-                cc.setFailedReason("Invalid phone number");
-            } else {
-                WhatsAppMessage msg = sendTemplate(account, normalizePhone(cc.getPhoneNumber()), templateName,
-                        language, components, "Campaign", c.getId(), null, c.getId());
-                boolean failed = "failed".equals(msg.getStatus());
-                cc.setStatus(failed ? "failed" : "sent");
-                cc.setWaMessageId(msg.getWaMessageId());
-                if (failed) cc.setFailedReason(truncate(msg.getErrorMessage(), 300));
-            }
-        } catch (Exception e) {
-            log.warn("Campaign {} recipient {} failed: {}", c.getId(), cc.getId(), e.toString());
-            cc.setStatus("failed");
-            cc.setFailedReason("Send failed");
-        }
-        cc.setSentAt(Instant.now());
-        contactRepo.save(cc);
-    }
-
-    private WhatsAppAccount resolveAccount(Campaign c) {
-        if (c.getWaAccountId() != null) {
-            return accountRepo.findByIdAndOrganizationId(c.getWaAccountId(), c.getOrganizationId()).orElse(null);
-        }
-        return accountRepo.findFirstByOrganizationIdAndActiveTrue(c.getOrganizationId()).orElse(null);
-    }
-
-    /** Recomputes campaign counters from recipient rows (cumulative: read ⊂ delivered ⊂ sent). */
-    public void refreshCampaignCounts(Long campaignId) {
-        if (campaignId == null) return;
-        int sent      = (int) contactRepo.countByCampaignIdAndStatusIn(campaignId, List.of("sent", "delivered", "read"));
-        int delivered = (int) contactRepo.countByCampaignIdAndStatusIn(campaignId, List.of("delivered", "read"));
-        int read      = (int) contactRepo.countByCampaignIdAndStatus(campaignId, "read");
-        int failed    = (int) contactRepo.countByCampaignIdAndStatus(campaignId, "failed");
-        campaignRepo.updateCounts(campaignId, sent, delivered, read, failed, Instant.now());
-    }
-
-    private void completeIfDone(Long campaignId) {
-        long open = contactRepo.countByCampaignIdAndStatusIn(campaignId, List.of("pending", "sending"));
-        if (open == 0) campaignRepo.markCompleted(campaignId, Instant.now());
-    }
-
-    /**
-     * Every minute: start scheduled campaigns that are due, and re-dispatch
-     * running WhatsApp campaigns that still have pending recipients (e.g. after
-     * a restart or a rejected executor submission). Per-recipient claiming
-     * makes overlapping dispatches safe.
-     */
-    @Scheduled(fixedDelayString = "${app.campaigns.scheduler-delay-ms:60000}",
-               initialDelayString = "${app.campaigns.scheduler-initial-delay-ms:30000}")
-    @SchedulerLock(name = "campaigns.runDue", lockAtMostFor = "PT10M")
-    public void runDueCampaigns() {
-        try {
-            Instant now = Instant.now();
-            for (Campaign c : campaignRepo.findByStatusAndScheduledAtLessThanEqual("scheduled", now)) {
-                if (campaignRepo.markScheduledRunning(c.getId(), now) == 1 && "whatsapp".equals(c.getType())) {
-                    log.info("Scheduled campaign {} started", c.getId());
-                    dispatchCampaignAsync(c.getId());
-                }
-            }
-            for (Campaign c : campaignRepo.findByStatusAndType("running", "whatsapp")) {
-                if (!dispatching.contains(c.getId())
-                        && contactRepo.countByCampaignIdAndStatus(c.getId(), "pending") > 0) {
-                    dispatchCampaignAsync(c.getId());
-                }
-            }
-        } catch (Exception e) {
-            log.error("Campaign scheduler run failed: {}", e.toString(), e);
-        }
     }
 
     private static String truncate(String s, int max) {

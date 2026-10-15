@@ -43,6 +43,13 @@ public class AiAutomationRun {
     @Column(name = "completed_at")
     private Instant completedAt;
 
+    @Column(name = "duration_ms")
+    private Long durationMs;
+
+    // manual | event | scheduled | webhook
+    @Column(name = "trigger_source", length = 30)
+    private String triggerSource;
+
     @Column(name = "tokens_used")
     private Integer tokensUsed;
 

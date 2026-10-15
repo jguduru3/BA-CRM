@@ -81,6 +81,8 @@ public class SecurityConfig {
                 .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
                 // Meta calls the WhatsApp webhook without a JWT; it is HMAC-verified instead.
                 .requestMatchers("/api/whatsapp/webhook").permitAll()
+                // Automation webhook triggers are authenticated by a per-automation HMAC signature.
+                .requestMatchers(HttpMethod.POST, "/api/automations/*/hook").permitAll()
                 // Public, read-only API reference (no data) — disable via API_DOCS_ENABLED=false.
                 .requestMatchers("/api/docs", "/api/docs/**", "/swagger-ui/**").permitAll()
                 .anyRequest().authenticated()

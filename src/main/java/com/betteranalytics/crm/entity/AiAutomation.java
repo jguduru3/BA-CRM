@@ -2,6 +2,7 @@ package com.betteranalytics.crm.entity;
 
 import com.betteranalytics.crm.security.EncryptedStringConverter;
 import com.betteranalytics.crm.security.SecretCrypto;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.persistence.*;
 import lombok.Getter;
@@ -61,6 +62,17 @@ public class AiAutomation {
 
     @Column(name = "last_run_at")
     private Instant lastRunAt;
+
+    // Cron bookkeeping for the "scheduled" trigger (V30).
+    @JsonIgnore
+    @Column(name = "schedule_last_fired_at")
+    private Instant scheduleLastFiredAt;
+
+    // HMAC secret for the "webhook" trigger — encrypted at rest, never serialized.
+    @JsonIgnore
+    @Convert(converter = EncryptedStringConverter.class)
+    @Column(name = "webhook_secret", columnDefinition = "TEXT")
+    private String webhookSecret;
 
     @Column(name = "created_by", nullable = false)
     private Long createdBy;

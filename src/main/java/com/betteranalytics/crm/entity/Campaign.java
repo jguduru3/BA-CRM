@@ -3,10 +3,12 @@ package com.betteranalytics.crm.entity;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
+import org.hibernate.annotations.DynamicUpdate;
 import java.time.Instant;
 
 @Entity
 @Table(name = "campaigns")
+@DynamicUpdate   // only changed columns are written, so status saves never clobber dispatcher counters
 @Getter @Setter
 public class Campaign {
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -22,7 +24,8 @@ public class Campaign {
     @Column(nullable = false, length = 20)
     private String type = "whatsapp";
 
-    // draft | pending_approval | approved | scheduled | running | paused | completed | cancelled
+    // draft | submitted | approved | rejected | scheduled | sending | paused | completed | cancelled
+    // (legacy pending_approval / running were renamed by V30)
     @Column(nullable = false, length = 25)
     private String status = "draft";
 
@@ -92,6 +95,11 @@ public class Campaign {
     // Optional inline audience criteria JSON (alternative to CampaignAudience table)
     @Column(name = "audience_criteria_json", columnDefinition = "TEXT")
     private String audienceCriteriaJson;
+
+    // Optimistic lock (V30): concurrent status changes → 409 instead of a lost update.
+    @Version
+    @Column(nullable = false)
+    private Long version;
 
     @Column(name = "created_at", updatable = false)
     private Instant createdAt;
