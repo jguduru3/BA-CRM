@@ -2,12 +2,13 @@ package com.betteranalytics.crm.repository;
 
 import com.betteranalytics.crm.entity.Task;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import java.util.List;
 import java.util.Optional;
 
-public interface TaskRepository extends JpaRepository<Task, Long> {
+public interface TaskRepository extends JpaRepository<Task, Long>, JpaSpecificationExecutor<Task> {
     List<Task> findByOrganizationId(Long organizationId);
 
     Optional<Task> findByIdAndOrganizationId(Long id, Long organizationId);

@@ -472,6 +472,35 @@ public class PermissionService {
         return c;
     }
 
+    // ── Query-level record scope (for database-side list filtering) ──────────────
+    /**
+     * The record owners the actor may {@code action} for {@code resource}, so list
+     * endpoints, reports and exports can put record scope into the WHERE clause
+     * ({@code owner_id IN (...)}) instead of loading whole tables and calling
+     * {@link #can} per row. Mirrors can() exactly:
+     *   all            — ORG scope, no owner filter;
+     *   ownerIds       — OWN: self (+ delegators' scope for delegable resources);
+     *                    TEAM: self + reports + led-team rosters (+ delegations);
+     *   includeUnowned — records with no owner are visible (see allowsUnowned()).
+     * A role with no access gets {@code none() == true}.
+     */
+    public record OwnerScope(boolean all, Set<Long> ownerIds, boolean includeUnowned) {
+        public boolean none() {
+            return !all && ownerIds.isEmpty() && !includeUnowned;
+        }
+    }
+
+    public OwnerScope ownerScope(User actor, Action action, ResourceType resource) {
+        Scope scope = FeaturePermissionTable.lookup(actor.getRole(), action, resource);
+        if (scope == Scope.NONE) return new OwnerScope(false, Set.of(), false);
+        if (scope == Scope.ORG) return new OwnerScope(true, Set.of(), true);
+        Set<Long> ids = new HashSet<>();
+        if (scope == Scope.OWN) ids.add(actor.getId());
+        else ids.addAll(managedUserIds(actor));
+        if (DELEGABLE.contains(resource)) ids.addAll(delegatedOwnerIds(actor));
+        return new OwnerScope(false, Collections.unmodifiableSet(ids), allowsUnowned(scope, action, resource));
+    }
+
     private Activity shallowCopyActivity(Activity a) {
         Activity c = new Activity();
         c.setId(a.getId()); c.setOrganizationId(a.getOrganizationId()); c.setType(a.getType());

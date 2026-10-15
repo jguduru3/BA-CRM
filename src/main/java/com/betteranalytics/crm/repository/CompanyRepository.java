@@ -2,12 +2,13 @@ package com.betteranalytics.crm.repository;
 
 import com.betteranalytics.crm.entity.Company;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import java.util.List;
 import java.util.Optional;
 
-public interface CompanyRepository extends JpaRepository<Company, Long> {
+public interface CompanyRepository extends JpaRepository<Company, Long>, JpaSpecificationExecutor<Company> {
     List<Company> findByOrganizationId(Long organizationId);
 
     Optional<Company> findByIdAndOrganizationId(Long id, Long organizationId);
@@ -22,4 +23,8 @@ public interface CompanyRepository extends JpaRepository<Company, Long> {
 
     @Query(value = "SELECT * FROM companies WHERE id = :id AND organization_id = :orgId", nativeQuery = true)
     Optional<Company> findByIdAndOrganizationIdIncludingDeleted(@Param("id") Long id, @Param("orgId") Long orgId);
+
+    // ── V20+: CRM core ───────────────────────────────────────────────────────────
+
+    Optional<Company> findFirstByOrganizationIdAndNameIgnoreCaseOrderByIdAsc(Long organizationId, String name);
 }
