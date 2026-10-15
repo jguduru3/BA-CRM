@@ -1,14 +1,16 @@
 package com.betteranalytics.crm.controller;
 
 import com.betteranalytics.crm.entity.OrgSettings;
-import com.betteranalytics.crm.entity.Role;
 import com.betteranalytics.crm.entity.User;
+import com.betteranalytics.crm.permission.Action;
+import com.betteranalytics.crm.permission.PermissionService;
+import com.betteranalytics.crm.permission.ResourceType;
 import com.betteranalytics.crm.repository.OrgSettingsRepository;
 import com.betteranalytics.crm.security.CurrentUser;
 import com.betteranalytics.crm.security.SecretCrypto;
 import com.betteranalytics.crm.service.AiService;
+import com.betteranalytics.crm.service.AuditService;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
@@ -21,8 +23,11 @@ import java.util.regex.Pattern;
  * AI configuration per organization.
  *
  * GET    /api/settings/ai              — read settings (key never returned: aiKeySet + aiKeyHint)
- * PUT    /api/settings/ai              — update provider, model, key, enabled (SUPER_ADMIN only)
- * DELETE /api/settings/ai/key          — clear the stored API key (SUPER_ADMIN only)
+ * PUT    /api/settings/ai              — update provider, model, key, enabled
+ * DELETE /api/settings/ai/key          — clear the stored API key
+ *
+ * Permissions via PermissionService / ResourceType.ORG_SETTINGS: VIEW for every
+ * role (so the UI knows whether AI is on), EDIT for SUPER_ADMIN only.
  */
 @RestController
 @RequestMapping("/api/settings")
@@ -33,22 +38,31 @@ public class OrgSettingsController {
 
     private final OrgSettingsRepository settingsRepo;
     private final CurrentUser           currentUser;
+    private final PermissionService     permissionService;
+    private final AuditService          auditService;
 
-    public OrgSettingsController(OrgSettingsRepository settingsRepo, CurrentUser currentUser) {
+    public OrgSettingsController(OrgSettingsRepository settingsRepo, CurrentUser currentUser,
+                                 PermissionService permissionService, AuditService auditService) {
         this.settingsRepo = settingsRepo;
         this.currentUser  = currentUser;
+        this.permissionService = permissionService;
+        this.auditService = auditService;
     }
 
     @GetMapping("/ai")
     public ResponseEntity<Map<String, Object>> getAiSettings() {
-        Long orgId = currentUser.organizationId();
+        User actor = currentUser.get();
+        permissionService.require(actor, Action.VIEW, ResourceType.ORG_SETTINGS, actor.getOrganizationId(), null);
+        Long orgId = actor.getOrganizationId();
         OrgSettings s = settingsRepo.findByOrganizationId(orgId).orElse(null);
         if (s == null) {
-            return ResponseEntity.ok(Map.of(
-                    "aiEnabled",  false,
-                    "aiProvider", "openai",
-                    "aiModel",    "gpt-4o-mini",
-                    "aiKeySet",   false));
+            Map<String, Object> d = new LinkedHashMap<>();
+            d.put("aiEnabled", false);
+            d.put("aiProvider", "anthropic");
+            d.put("aiModel", AiService.DEFAULT_ANTHROPIC_MODEL);
+            d.put("aiKeySet", false);
+            d.put("aiKeyHint", null);
+            return ResponseEntity.ok(d);
         }
         return ResponseEntity.ok(safeView(s));
     }
@@ -57,16 +71,18 @@ public class OrgSettingsController {
     public ResponseEntity<Map<String, Object>> updateAiSettings(
             @RequestBody Map<String, Object> req) {
         User actor = currentUser.get();
-        if (actor.getRole() != Role.SUPER_ADMIN)
-            throw new AccessDeniedException("only SUPER_ADMIN can manage AI settings");
+        permissionService.require(actor, Action.EDIT, ResourceType.ORG_SETTINGS, actor.getOrganizationId(), null);
 
-        Long orgId = currentUser.organizationId();
+        Long orgId = actor.getOrganizationId();
         OrgSettings s = settingsRepo.findByOrganizationId(orgId).orElseGet(() -> {
             OrgSettings n = new OrgSettings();
             n.setOrganizationId(orgId);
+            n.setAiProvider("anthropic");
+            n.setAiModel(AiService.DEFAULT_ANTHROPIC_MODEL);
             n.setCreatedAt(Instant.now());
             return n;
         });
+        Map<String, Object> before = safeView(s);
 
         if (req.get("aiEnabled") != null) {
             if (!(req.get("aiEnabled") instanceof Boolean b))
@@ -97,21 +113,22 @@ public class OrgSettingsController {
 
         s.setUpdatedAt(Instant.now());
         settingsRepo.save(s);
+        auditService.log("update", "org_settings", s.getId(), "AI settings", before, safeView(s));
         return ResponseEntity.ok(safeView(s));
     }
 
     @DeleteMapping("/ai/key")
     public ResponseEntity<Map<String, Object>> clearApiKey() {
         User actor = currentUser.get();
-        if (actor.getRole() != Role.SUPER_ADMIN)
-            throw new AccessDeniedException("only SUPER_ADMIN can manage AI settings");
+        permissionService.require(actor, Action.EDIT, ResourceType.ORG_SETTINGS, actor.getOrganizationId(), null);
 
-        Long orgId = currentUser.organizationId();
+        Long orgId = actor.getOrganizationId();
         settingsRepo.findByOrganizationId(orgId).ifPresent(s -> {
             s.setAiApiKey(null);
             s.setAiEnabled(false);
             s.setUpdatedAt(Instant.now());
             settingsRepo.save(s);
+            auditService.log("clear_ai_key", "org_settings", s.getId(), "AI settings", null, null);
         });
         return ResponseEntity.ok(Map.of("ok", true, "aiKeySet", false, "aiEnabled", false));
     }
@@ -120,8 +137,9 @@ public class OrgSettingsController {
         boolean keySet = s.getAiApiKey() != null && !s.getAiApiKey().isBlank();
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("aiEnabled",  s.isAiEnabled());
-        m.put("aiProvider", s.getAiProvider() != null ? s.getAiProvider() : "openai");
-        m.put("aiModel",    s.getAiModel()    != null ? s.getAiModel()    : "gpt-4o-mini");
+        String provider = s.getAiProvider() != null ? s.getAiProvider() : "anthropic";
+        m.put("aiProvider", provider);
+        m.put("aiModel",    AiService.modelFor(provider, s.getAiModel()));
         m.put("aiKeySet",   keySet);
         m.put("aiKeyHint",  keySet ? SecretCrypto.hint(s.getAiApiKey()) : null);
         return m;

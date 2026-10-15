@@ -221,3 +221,12 @@ spring:
     password: ${DB_PASS}
   jpa:
     database-platform: org.hibernate.dialect.PostgreSQLDialect
+
+---
+# ── Engagement: FCM HTTP v1 push + automation cron scan (applies to every profile) ──
+app:
+  fcm:
+    # Google service-account key JSON (raw or base64) for FCM HTTP v1. Blank = push disabled.
+    service-account-json: ${FCM_SERVICE_ACCOUNT_JSON:}
+  automations:
+    scheduler-delay-ms: ${AUTOMATIONS_SCHEDULER_DELAY_MS:60000}
