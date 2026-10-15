@@ -9,6 +9,9 @@ import java.util.List;
 import java.util.Optional;
 
 public interface DatabasePropertyRepository extends JpaRepository<DatabaseProperty, Long> {
+    /** Properties of several databases in one query (relation chip titles). */
+    List<DatabaseProperty> findByDatabaseIdInAndOrganizationIdOrderByPosition(java.util.Collection<Long> databaseIds, Long organizationId);
+
     List<DatabaseProperty> findByDatabaseIdAndOrganizationIdOrderByPosition(Long databaseId, Long organizationId);
     Optional<DatabaseProperty> findByIdAndOrganizationId(Long id, Long organizationId);
     void deleteByDatabaseIdAndOrganizationId(Long databaseId, Long organizationId);
