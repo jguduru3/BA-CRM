@@ -50,7 +50,7 @@ export function LeadForm({
           <select
             className="select"
             value={value.companyId ?? ""}
-            onChange={(e) => set("companyId", e.target.value ? Number(e.target.value) : (null as any))}
+            onChange={(e) => set("companyId", e.target.value ? Number(e.target.value) : (null as never))}
           >
             <option value="">— None —</option>
             {companies.data?.data.map((c) => (
@@ -110,7 +110,7 @@ export function LeadForm({
           <select
             className="select"
             value={value.ownerId ?? ""}
-            onChange={(e) => set("ownerId", e.target.value ? Number(e.target.value) : (null as any))}
+            onChange={(e) => set("ownerId", e.target.value ? Number(e.target.value) : (null as never))}
           >
             <option value="">— Unassigned —</option>
             {users.data?.map((u) => (
@@ -134,7 +134,7 @@ export function LeadForm({
             className="input"
             type="datetime-local"
             value={value.followUpAt ? value.followUpAt.slice(0, 16) : ""}
-            onChange={(e) => set("followUpAt", e.target.value ? new Date(e.target.value).toISOString() : (null as any))}
+            onChange={(e) => set("followUpAt", e.target.value ? new Date(e.target.value).toISOString() : (null as never))}
           />
         </Field>
       </FieldGrid>

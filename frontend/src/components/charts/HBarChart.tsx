@@ -16,12 +16,12 @@ export function HBarChart({
   height,
   colorAt,
 }: {
-  data: Record<string, any>[];
+  data: Record<string, string | number | null | undefined>[];
   valueKey?: string;
   labelKey?: string;
   formatter?: (v: number) => string;
   height?: number;
-  colorAt?: (row: Record<string, any>, i: number) => string | undefined;
+  colorAt?: (row: Record<string, string | number | null | undefined>, i: number) => string | undefined;
 }) {
   const palette = useChartPalette();
   const h = height ?? Math.max(160, data.length * 44);

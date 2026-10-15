@@ -26,7 +26,7 @@ export default function TrashPage() {
 
   const list = useQuery({
     queryKey: ["trash", resource],
-    queryFn: async () => (await api.get<any[]>(`/${resource}/trash`)).data,
+    queryFn: async () => (await api.get<Array<{ id: number; name?: string; title?: string; deletedAt?: string; deleteReason?: string | null }>>(`/${resource}/trash`)).data,
   });
 
   const restore = useMutation({

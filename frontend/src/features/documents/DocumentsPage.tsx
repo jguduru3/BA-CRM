@@ -10,7 +10,6 @@ import { AttachmentList } from "@/components/ui/AttachmentList";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
 
-const RELATED_TYPES = ["", "Lead", "Opportunity", "Contact", "Company"];
 
 export default function DocumentsPage() {
   const [selectedId, setSelectedId] = useState<number | null>(null);

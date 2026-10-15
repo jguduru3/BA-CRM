@@ -41,7 +41,6 @@ export default function WhiteboardDetailPage() {
   });
 
   const items = (board.data?.items ?? []).map((it) => ({ ...it, ...localItems[it.id] }));
-  const selected = items.find((i) => i.id === selectedId) ?? null;
 
   const addItem = useMutation({
     mutationFn: async (body: Partial<Item>) => (await api.post<Item>(`/whiteboards/${boardId}/items`, body)).data,

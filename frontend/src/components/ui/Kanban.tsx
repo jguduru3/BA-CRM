@@ -39,7 +39,7 @@ export function Kanban<T extends { id: number }>({
     <div className="kanban-track h-full">
       {columns.map((col) => {
         const items = itemsByColumn[col.key] ?? [];
-        const total = items.reduce((s, i: any) => s + (typeof i.value === "number" ? i.value : 0), 0);
+        const total = items.reduce((s, i) => { const v = (i as { value?: unknown }).value; return s + (typeof v === "number" ? v : 0); }, 0);
         return (
           <div
             key={col.key}

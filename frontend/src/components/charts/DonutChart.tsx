@@ -13,16 +13,17 @@ export function DonutChart({
   valueKey = "value",
   formatter,
 }: {
-  data: { [k: string]: any }[];
+  data: { [k: string]: string | number | null | undefined }[];
   nameKey?: string;
   valueKey?: string;
   formatter?: (v: number) => string;
 }) {
   const palette = useChartPalette();
-  const sorted = [...data].sort((a, b) => b[valueKey] - a[valueKey]);
+  const num = (r: { [k: string]: string | number | null | undefined }) => Number(r[valueKey] ?? 0) || 0;
+  const sorted = [...data].sort((a, b) => num(b) - num(a));
   const top = sorted.slice(0, 8);
   const rest = sorted.slice(8);
-  const restSum = rest.reduce((s, r) => s + r[valueKey], 0);
+  const restSum = rest.reduce((s, r) => s + num(r), 0);
   const chartData = restSum > 0 ? [...top, { [nameKey]: "Other", [valueKey]: restSum }] : top;
   const colorFor = (i: number) => (i < palette.series.length ? palette.series[i] : "#8793a3");
 
@@ -49,10 +50,10 @@ export function DonutChart({
               content={({ active, payload }) => (
                 <ChartTooltip
                   active={active}
-                  payload={payload?.map((p: any) => ({
-                    name: p.name,
-                    value: p.value,
-                    color: p.payload?.fill,
+                  payload={payload?.map((p) => ({
+                    name: String(p.name ?? ""),
+                    value: Number(p.value ?? 0),
+                    color: (p.payload as { fill?: string } | undefined)?.fill,
                   }))}
                   formatter={formatter}
                 />
@@ -69,7 +70,7 @@ export function DonutChart({
               <span className="truncate">{d[nameKey]}</span>
             </span>
             <span className="font-semibold tabular-nums shrink-0" style={{ color: "var(--ink-primary)" }}>
-              {formatter ? formatter(d[valueKey]) : d[valueKey]}
+              {formatter ? formatter(num(d)) : d[valueKey]}
             </span>
           </li>
         ))}

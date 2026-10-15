@@ -60,7 +60,7 @@ export function CompanyForm({ value, onChange }: { value: CompanyDraft; onChange
           <select
             className="select"
             value={value.ownerId ?? ""}
-            onChange={(e) => set("ownerId", e.target.value ? Number(e.target.value) : (null as any))}
+            onChange={(e) => set("ownerId", e.target.value ? Number(e.target.value) : (null as never))}
           >
             <option value="">— Unassigned —</option>
             {users.data?.map((u) => (

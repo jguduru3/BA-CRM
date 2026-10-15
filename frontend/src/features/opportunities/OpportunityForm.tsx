@@ -24,7 +24,7 @@ export function OpportunityForm({ value, onChange }: { value: OppDraft; onChange
           <select
             className="select"
             value={value.companyId ?? ""}
-            onChange={(e) => set("companyId", e.target.value ? Number(e.target.value) : (null as any))}
+            onChange={(e) => set("companyId", e.target.value ? Number(e.target.value) : (null as never))}
           >
             <option value="">— None —</option>
             {companies.data?.data.map((c) => (
@@ -38,7 +38,7 @@ export function OpportunityForm({ value, onChange }: { value: OppDraft; onChange
           <select
             className="select"
             value={value.ownerId ?? ""}
-            onChange={(e) => set("ownerId", e.target.value ? Number(e.target.value) : (null as any))}
+            onChange={(e) => set("ownerId", e.target.value ? Number(e.target.value) : (null as never))}
           >
             <option value="">— Unassigned —</option>
             {users.data?.map((u) => (

@@ -36,7 +36,7 @@ export function TaskForm({ value, onChange }: { value: TaskDraft; onChange: (pat
           <select
             className="select"
             value={value.assigneeId ?? ""}
-            onChange={(e) => set("assigneeId", e.target.value ? Number(e.target.value) : (null as any))}
+            onChange={(e) => set("assigneeId", e.target.value ? Number(e.target.value) : (null as never))}
           >
             <option value="">— Unassigned —</option>
             {users.data?.map((u) => (
@@ -62,7 +62,7 @@ export function TaskForm({ value, onChange }: { value: TaskDraft; onChange: (pat
             className="input"
             type="number"
             value={value.relatedId ?? ""}
-            onChange={(e) => set("relatedId", e.target.value ? Number(e.target.value) : (null as any))}
+            onChange={(e) => set("relatedId", e.target.value ? Number(e.target.value) : (null as never))}
           />
         </Field>
       </FieldGrid>

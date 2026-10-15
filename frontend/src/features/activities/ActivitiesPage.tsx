@@ -16,6 +16,7 @@ import { useUsersLookup } from "@/lib/hooks";
 import { formatDateTime, formatRelative } from "@/lib/format";
 import { toast } from "@/lib/toast";
 import type { Activity } from "@/lib/types";
+import type { LucideIcon } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Avatar } from "@/components/ui/Avatar";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -25,7 +26,7 @@ import { SkeletonRows } from "@/components/ui/Skeleton";
 
 const TYPES = ["call", "email", "meeting", "note", "whatsapp", "linkedin", "task", "stage_change"];
 const RELATED_TYPES = ["Lead", "Opportunity", "Contact", "Company"];
-const TYPE_ICON: Record<string, any> = {
+const TYPE_ICON: Record<string, LucideIcon> = {
   call: Phone,
   email: Mail,
   meeting: Video,
@@ -120,7 +121,7 @@ export default function ActivitiesPage() {
                 <div key={a.id} className="relative">
                   <div
                     className="absolute -left-6 top-1 flex items-center justify-center h-5 w-5 rounded-full ring-4"
-                    style={{ backgroundColor: "var(--brand-500)", ["--tw-ring-color" as any]: "var(--plane)" }}
+                    style={{ backgroundColor: "var(--brand-500)", ["--tw-ring-color" as string]: "var(--plane)" } as React.CSSProperties}
                   >
                     <Icon size={11} className="text-white" />
                   </div>

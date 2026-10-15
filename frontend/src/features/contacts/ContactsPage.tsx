@@ -29,7 +29,6 @@ export default function ContactsPage() {
   const users = useUsersLookup();
   const companies = useCompaniesLookup();
   const categories = useContactCategories();
-  const qc = useQueryClient();
   const { confirm, node: confirmNode } = useConfirm();
 
   const { list, create, update, remove } = useEntityCrud<Contact>("contacts", {
@@ -271,7 +270,7 @@ function CategoryManager({ open, onClose }: { open: boolean; onClose: () => void
   const categories = useContactCategories();
   const qc = useQueryClient();
   const [draft, setDraft] = useState<Partial<ContactCategory>>({ color: CAT_COLORS[0] });
-  const { confirm, node: confirmNode } = useConfirm();
+  const { node: confirmNode } = useConfirm();
 
   const create = useMutation({
     mutationFn: async () => api.post("/contact-categories", draft),

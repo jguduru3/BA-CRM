@@ -75,7 +75,7 @@ export function SimpleCrudPage<T extends { id: number }>({
   };
 
   const requiredOk = fields.filter((f) => f.required).every((f) => {
-    const v = (draft as any)[f.key];
+    const v = (draft as Record<string, unknown>)[f.key];
     return v !== undefined && v !== null && String(v).trim() !== "";
   });
 
@@ -133,13 +133,13 @@ export function SimpleCrudPage<T extends { id: number }>({
               {f.type === "textarea" ? (
                 <textarea
                   className="textarea"
-                  value={(draft as any)[f.key] ?? ""}
+                  value={String((draft as Record<string, unknown>)[f.key] ?? "")}
                   onChange={(e) => setDraft((d) => ({ ...d, [f.key]: e.target.value }))}
                 />
               ) : f.type === "select" ? (
                 <select
                   className="select"
-                  value={(draft as any)[f.key] ?? ""}
+                  value={String((draft as Record<string, unknown>)[f.key] ?? "")}
                   onChange={(e) => setDraft((d) => ({ ...d, [f.key]: e.target.value }))}
                 >
                   <option value="">—</option>
@@ -151,21 +151,21 @@ export function SimpleCrudPage<T extends { id: number }>({
                 <input
                   type="checkbox"
                   className="checkbox"
-                  checked={!!(draft as any)[f.key]}
+                  checked={!!(draft as Record<string, unknown>)[f.key]}
                   onChange={(e) => setDraft((d) => ({ ...d, [f.key]: e.target.checked }))}
                 />
               ) : f.type === "color" ? (
                 <input
                   type="color"
                   className="input h-10"
-                  value={(draft as any)[f.key] ?? "#1ca3e6"}
+                  value={String((draft as Record<string, unknown>)[f.key] ?? "#1ca3e6")}
                   onChange={(e) => setDraft((d) => ({ ...d, [f.key]: e.target.value }))}
                 />
               ) : (
                 <input
                   className="input"
                   type={f.type === "datetime" ? "datetime-local" : f.type}
-                  value={(draft as any)[f.key] ?? ""}
+                  value={String((draft as Record<string, unknown>)[f.key] ?? "")}
                   onChange={(e) =>
                     setDraft((d) => ({ ...d, [f.key]: f.type === "number" ? Number(e.target.value) : e.target.value }))
                   }

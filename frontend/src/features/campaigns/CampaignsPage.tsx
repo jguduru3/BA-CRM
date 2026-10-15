@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { LucideIcon } from "lucide-react";
 import { Megaphone, Pause, Play, Plus, Send, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
@@ -28,7 +29,7 @@ interface WaAccount {
   displayPhoneNumber: string;
 }
 
-const ACTIONS: Record<string, { key: string; label: string; icon: any; danger?: boolean }[]> = {
+const ACTIONS: Record<string, { key: string; label: string; icon: LucideIcon; danger?: boolean }[]> = {
   draft: [
     { key: "submit", label: "Submit for approval", icon: Send },
     { key: "launch", label: "Launch now", icon: Play },
@@ -226,8 +227,8 @@ export default function CampaignsPage() {
             <Field label="WhatsApp account" hint={accounts.isError ? "No accounts configured" : undefined}>
               <select
                 className="select"
-                value={(draft as any).waAccountId ?? ""}
-                onChange={(e) => setDraft((d) => ({ ...d, waAccountId: e.target.value ? Number(e.target.value) : undefined } as any))}
+                value={(draft as Partial<CampaignRow> & { waAccountId?: number }).waAccountId ?? ""}
+                onChange={(e) => setDraft((d) => ({ ...d, waAccountId: e.target.value ? Number(e.target.value) : undefined }))}
               >
                 <option value="">— Default —</option>
                 {accounts.data?.map((a) => (
@@ -240,23 +241,23 @@ export default function CampaignsPage() {
             <Field label="Template name" hint="Must be an approved WhatsApp template" className="sm:col-span-2">
               <input
                 className="input"
-                value={(draft as any).templateName ?? ""}
-                onChange={(e) => setDraft((d) => ({ ...d, templateName: e.target.value } as any))}
+                value={(draft as Partial<CampaignRow> & { waAccountId?: number }).templateName ?? ""}
+                onChange={(e) => setDraft((d) => ({ ...d, templateName: e.target.value }))}
               />
             </Field>
             <Field label="Scheduled for (optional)" className="sm:col-span-2">
               <input
                 className="input"
                 type="datetime-local"
-                onChange={(e) => setDraft((d) => ({ ...d, scheduledAt: e.target.value ? new Date(e.target.value).toISOString() : undefined } as any))}
+                onChange={(e) => setDraft((d) => ({ ...d, scheduledAt: e.target.value ? new Date(e.target.value).toISOString() : undefined }))}
               />
             </Field>
           </FieldGrid>
           <Field label="Message preview / notes">
             <textarea
               className="textarea"
-              value={(draft as any).messageBody ?? ""}
-              onChange={(e) => setDraft((d) => ({ ...d, messageBody: e.target.value } as any))}
+              value={(draft as Partial<CampaignRow> & { waAccountId?: number }).messageBody ?? ""}
+              onChange={(e) => setDraft((d) => ({ ...d, messageBody: e.target.value }))}
             />
           </Field>
           <div className="flex items-center justify-end gap-2 pt-4 hairline border-t">
