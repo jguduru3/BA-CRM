@@ -45,13 +45,19 @@ public class AuthController {
     private final RateLimiter rateLimiter;
     private final int maxFailures;
     private final Duration lockDuration;
+    private final int loginPerIpPerMinute;
+    private final int loginPerEmailPerWindow;
+    private final long loginEmailWindowMs;
     /** Hash of a random string, compared against when the email is unknown to equalise timing. */
     private final String dummyHash;
 
     public AuthController(UserRepository userRepository, AuditEventRepository auditEventRepository,
                           PasswordEncoder passwordEncoder, JwtUtil jwtUtil, RateLimiter rateLimiter,
                           @Value("${app.auth.max-failed-logins:5}") int maxFailures,
-                          @Value("${app.auth.lock-minutes:15}") int lockMinutes) {
+                          @Value("${app.auth.lock-minutes:15}") int lockMinutes,
+                          @Value("${app.rate-limit.login-per-ip-per-minute:20}") int loginPerIpPerMinute,
+                          @Value("${app.rate-limit.login-per-email:10}") int loginPerEmailPerWindow,
+                          @Value("${app.rate-limit.login-email-window-minutes:5}") int loginEmailWindowMinutes) {
         this.userRepository = userRepository;
         this.auditEventRepository = auditEventRepository;
         this.passwordEncoder = passwordEncoder;
@@ -59,6 +65,9 @@ public class AuthController {
         this.rateLimiter = rateLimiter;
         this.maxFailures = maxFailures;
         this.lockDuration = Duration.ofMinutes(lockMinutes);
+        this.loginPerIpPerMinute = loginPerIpPerMinute;
+        this.loginPerEmailPerWindow = loginPerEmailPerWindow;
+        this.loginEmailWindowMs = Duration.ofMinutes(loginEmailWindowMinutes).toMillis();
         this.dummyHash = passwordEncoder.encode("timing-equaliser-" + System.nanoTime());
     }
 
@@ -71,8 +80,8 @@ public class AuthController {
         }
         String email = req.email().trim().toLowerCase(Locale.ROOT);
 
-        RateLimiter.Decision byIp = rateLimiter.hit("login:ip:" + ip, 20, 60_000);
-        RateLimiter.Decision byEmail = rateLimiter.hit("login:email:" + email, 10, 300_000);
+        RateLimiter.Decision byIp = rateLimiter.hit("login:ip:" + ip, loginPerIpPerMinute, 60_000);
+        RateLimiter.Decision byEmail = rateLimiter.hit("login:email:" + email, loginPerEmailPerWindow, loginEmailWindowMs);
         if (!byIp.allowed() || !byEmail.allowed()) {
             long retry = Math.max(byIp.retryAfterSeconds(), byEmail.retryAfterSeconds());
             return ResponseEntity.status(429).header("Retry-After", String.valueOf(retry))
@@ -146,7 +155,7 @@ public class AuthController {
         if (current == null || !passwordEncoder.matches(current, user.getPassword())) {
             return ResponseEntity.badRequest().body(Map.of("error", "current password is incorrect"));
         }
-        String problem = PasswordPolicy.validate(next, user.getEmail());
+        String problem = PasswordPolicy.validate(next, user.getEmail(), user.getName());
         if (problem != null) return ResponseEntity.badRequest().body(Map.of("error", problem));
         if (passwordEncoder.matches(next, user.getPassword())) {
             return ResponseEntity.badRequest().body(Map.of("error", "new password must differ from the current one"));

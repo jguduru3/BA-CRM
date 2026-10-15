@@ -67,7 +67,7 @@ public class UserController {
         String email = normalizeEmail(req.email);
         if (email == null) return ResponseEntity.badRequest().body(Map.of("error", "email is required"));
         if (!EMAIL.matcher(email).matches()) return ResponseEntity.badRequest().body(Map.of("error", "email is not a valid address"));
-        String pwError = PasswordPolicy.validate(req.password, email);
+        String pwError = PasswordPolicy.validate(req.password, email, req.name);
         if (pwError != null) return ResponseEntity.badRequest().body(Map.of("error", pwError));
         if (userRepository.existsByEmailIgnoreCase(email)) return ResponseEntity.status(409).body(Map.of("error", EMAIL_UNAVAILABLE));
 
@@ -245,7 +245,7 @@ public class UserController {
                 return ResponseEntity.badRequest().body(Map.of("error", "current password is incorrect"));
             }
         }
-        String pwError = PasswordPolicy.validate(req.newPassword, existing.getEmail());
+        String pwError = PasswordPolicy.validate(req.newPassword, existing.getEmail(), existing.getName());
         if (pwError != null) return ResponseEntity.badRequest().body(Map.of("error", pwError));
         if (isSelf && passwordEncoder.matches(req.newPassword, existing.getPassword())) {
             return ResponseEntity.badRequest().body(Map.of("error", "new password must differ from the current one"));
