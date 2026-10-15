@@ -48,6 +48,17 @@ public class WhiteboardItem {
     @Column(name = "attachment_id")
     private Long attachmentId;
 
+    /** Connector endpoints (type "connector" only) — items on the same board. */
+    @Column(name = "from_item_id")
+    private Long fromItemId;
+
+    @Column(name = "to_item_id")
+    private Long toItemId;
+
+    /** Connector arrowheads: none | end | start | both. The label lives in {@code content}. */
+    @Column(length = 10)
+    private String arrowhead;
+
     @Column(name = "created_by")
     private Long createdBy;
 
