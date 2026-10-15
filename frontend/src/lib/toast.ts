@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { onLogout } from "./auth";
 
 export type ToastKind = "success" | "error" | "info";
 export interface ToastItem {
@@ -11,6 +12,7 @@ interface ToastState {
   items: ToastItem[];
   push: (kind: ToastKind, message: string) => void;
   dismiss: (id: number) => void;
+  clear: () => void;
 }
 
 let seq = 0;
@@ -25,7 +27,11 @@ export const useToastStore = create<ToastState>((set) => ({
     }, 4200);
   },
   dismiss: (id) => set((s) => ({ items: s.items.filter((t) => t.id !== id) })),
+  clear: () => set({ items: [] }),
 }));
+
+// A previous user's messages must not linger on the sign-in screen.
+onLogout(() => useToastStore.getState().clear());
 
 export const toast = {
   success: (message: string) => useToastStore.getState().push("success", message),

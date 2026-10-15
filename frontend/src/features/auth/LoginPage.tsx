@@ -45,7 +45,7 @@ export function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen w-full app-mesh flex items-center justify-center p-4 sm:p-6">
+    <div className="min-h-screen min-h-[100dvh] w-full app-mesh flex items-center justify-center px-4 py-8 sm:p-6">
       <div className="w-full max-w-[960px] grid lg:grid-cols-[1fr_1.1fr] rounded-[28px] overflow-hidden shadow-glass-lg glass-strong glass-reveal">
         {/* Brand panel */}
         <div
@@ -85,8 +85,8 @@ export function LoginPage() {
         </div>
 
         {/* Form panel */}
-        <div className="p-8 sm:p-12 flex flex-col justify-center">
-          <div className="mb-8">
+        <div className="px-6 py-9 sm:p-12 flex flex-col justify-center">
+          <div className="mb-8 lg:mb-10">
             <Logo height={44} />
           </div>
           <h1 className="text-[26px] font-semibold tracking-tight" style={{ color: "var(--ink-primary)" }}>
@@ -154,7 +154,7 @@ export function LoginPage() {
               </div>
             )}
 
-            <button type="submit" disabled={loading || !email || !password} className="btn-primary w-full py-2.5 mt-2">
+            <button type="submit" disabled={loading || !email || !password} className="btn-primary w-full min-h-[44px] mt-2">
               {loading ? "Signing in…" : "Sign in"}
               {!loading && <ArrowRight size={16} />}
             </button>

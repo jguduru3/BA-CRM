@@ -1,4 +1,4 @@
-import { AlertCircle, Check, KeyRound, LogOut } from "lucide-react";
+import { AlertCircle, ArrowLeft, Check, KeyRound, LogOut } from "lucide-react";
 import { useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
@@ -45,8 +45,8 @@ export default function ChangePasswordPage() {
   }
 
   return (
-    <div className="min-h-screen w-full app-mesh flex items-center justify-center p-4">
-      <form onSubmit={submit} className="w-full max-w-md glass-strong glass-reveal rounded-3xl shadow-glass-lg p-8 sm:p-10">
+    <div className="min-h-screen min-h-[100dvh] w-full app-mesh flex items-center justify-center px-4 py-8">
+      <form onSubmit={submit} className="w-full max-w-md glass-strong glass-reveal rounded-[28px] shadow-glass-lg px-6 py-8 sm:p-10">
         <Logo height={40} />
         <div
           className="mt-8 h-11 w-11 rounded-2xl flex items-center justify-center"
@@ -88,19 +88,25 @@ export default function ChangePasswordPage() {
             </div>
           )}
 
-          <button type="submit" className="btn-primary w-full py-2.5" disabled={!valid || saving}>
+          <button type="submit" className="btn-primary w-full min-h-[44px]" disabled={!valid || saving}>
             <Check size={16} /> {saving ? "Saving…" : "Save and continue"}
           </button>
-          <button
-            type="button"
-            className="btn-ghost w-full"
-            onClick={() => {
-              logout();
-              navigate("/login", { replace: true });
-            }}
-          >
-            <LogOut size={15} /> Sign out
-          </button>
+          {user?.mustChangePassword ? (
+            <button
+              type="button"
+              className="btn-ghost w-full min-h-[44px]"
+              onClick={() => {
+                logout();
+                navigate("/login", { replace: true });
+              }}
+            >
+              <LogOut size={15} /> Sign out
+            </button>
+          ) : (
+            <button type="button" className="btn-ghost w-full min-h-[44px]" onClick={() => navigate(-1)}>
+              <ArrowLeft size={15} /> Back
+            </button>
+          )}
         </div>
       </form>
     </div>

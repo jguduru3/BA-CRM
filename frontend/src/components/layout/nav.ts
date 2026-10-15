@@ -97,7 +97,8 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: "/team", label: "Team", icon: Users, minRole: MANAGER_UP },
       { to: "/teams", label: "Teams", icon: Users2, minRole: MANAGER_UP },
-      { to: "/departments", label: "Departments", icon: Network, minRole: ADMIN_ONLY },
+      // Everyone may view the org structure (backend: DEPARTMENT VIEW = all roles); only Super Admin edits it.
+      { to: "/departments", label: "Departments", icon: Network },
       { to: "/audit-log", label: "Audit Log", icon: History, minRole: AUDIT_ROLES },
       { to: "/integrations", label: "Integrations", icon: Plug, minRole: ADMIN_ONLY },
     ],

@@ -15,3 +15,13 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     </QueryClientProvider>
   </React.StrictMode>
 );
+
+// Installable app + fast shell. Production only: in dev the SW would fight Vite's HMR.
+// public/sw.js never caches or intercepts /api/*.
+if (import.meta.env.PROD && "serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {
+      /* offline support is a nice-to-have; never break the app over it */
+    });
+  });
+}

@@ -1,7 +1,8 @@
 import { Search } from "lucide-react";
 import { useEffect, useState } from "react";
+import { Logo } from "@/icons/Logo";
 import { CommandPalette } from "./CommandPalette";
-import { MobileNav } from "./MobileNav";
+import { MobileNavButton } from "./MobileNav";
 import { NotificationsPanel } from "./NotificationsPanel";
 import { ThemeToggle } from "./ThemeToggle";
 import { UserMenu } from "./UserMenu";
@@ -22,26 +23,33 @@ export function Topbar() {
   }, []);
 
   return (
-    <header className="h-16 shrink-0 flex items-center justify-between gap-3 px-4 sm:px-6 glass border-b hairline">
-      <div className="flex items-center gap-3 min-w-0 flex-1">
-        <MobileNav />
+    <header
+      className="shrink-0 flex items-center justify-between gap-2 sm:gap-3 px-3 sm:px-6 glass border-x-0 border-t-0 border-b hairline relative z-30"
+      style={{ height: "calc(4rem + env(safe-area-inset-top, 0px))", paddingTop: "env(safe-area-inset-top, 0px)" }}
+    >
+      <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
+        <MobileNavButton />
+        <Logo height={24} className="lg:hidden hidden min-[420px]:block shrink-0" />
         <button
           onClick={() => setPaletteOpen(true)}
-          className="group flex items-center gap-2.5 h-10 w-full max-w-md rounded-xl px-3.5 text-sm transition-all glass-solid hover:border-[rgb(var(--ring-brand)/0.35)]"
+          className="group flex items-center gap-2.5 h-10 w-full max-w-md rounded-xl px-3 sm:px-3.5 text-sm transition-all glass-solid hover:border-[rgb(var(--ring-brand)/0.35)] focus-brand"
           style={{ color: "var(--ink-muted)" }}
           aria-label="Search"
         >
-          <Search size={16} />
+          <Search size={16} className="shrink-0" />
           <span className="truncate hidden sm:inline">Search or jump to…</span>
-          <kbd className="ml-auto hidden md:inline text-[10px] font-semibold rounded-md px-1.5 py-0.5" style={{ backgroundColor: "rgb(var(--panel-border) / 0.07)" }}>
+          <kbd
+            className="ml-auto hidden md:inline text-[10px] font-semibold rounded-md px-1.5 py-0.5"
+            style={{ backgroundColor: "rgb(var(--panel-border) / 0.07)" }}
+          >
             {isMac ? "⌘" : "Ctrl"} K
           </kbd>
         </button>
       </div>
-      <div className="flex items-center gap-1.5 sm:gap-2">
+      <div className="flex items-center gap-1 sm:gap-2 shrink-0">
         <ThemeToggle />
         <NotificationsPanel />
-        <div className="w-px h-6 mx-1 hairline border-l" />
+        <div className="hidden sm:block w-px h-6 mx-1 hairline border-l" />
         <UserMenu />
       </div>
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />

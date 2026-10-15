@@ -5,6 +5,7 @@ import { PageLoader } from "@/components/layout/PageLoader";
 import { ProtectedRoute } from "@/components/layout/ProtectedRoute";
 import { Toaster } from "@/components/ui/Toaster";
 import { LoginPage } from "@/features/auth/LoginPage";
+import { useAuthStore } from "@/lib/auth";
 
 const DashboardPage = lazy(() => import("@/features/dashboard/DashboardPage"));
 const LeadsPage = lazy(() => import("@/features/leads/LeadsPage"));
@@ -38,6 +39,7 @@ const IntegrationsPage = lazy(() => import("@/features/integrations/Integrations
 const NotFoundPage = lazy(() => import("@/features/misc/NotFoundPage"));
 
 export default function App() {
+  const signedIn = useAuthStore((s) => s.isAuthenticated);
   return (
     <>
       <Suspense fallback={<PageLoader />}>
@@ -81,7 +83,9 @@ export default function App() {
 
         </Routes>
       </Suspense>
-      <Toaster />
+      <div className={`toaster-host ${signedIn ? "above-bottom-nav" : ""}`}>
+        <Toaster />
+      </div>
     </>
   );
 }

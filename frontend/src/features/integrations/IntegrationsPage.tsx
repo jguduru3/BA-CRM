@@ -10,12 +10,13 @@ import {
   RefreshCw,
   Send,
   ShieldAlert,
+  ShieldOff,
   Trash2,
   Webhook,
 } from "lucide-react";
 import { useState } from "react";
-import { Navigate } from "react-router-dom";
-import { api } from "@/lib/api";
+import { Link } from "react-router-dom";
+import { api, ApiError } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth";
 import { formatDateTime, formatRelative } from "@/lib/format";
 import { toast } from "@/lib/toast";
@@ -171,7 +172,26 @@ export default function IntegrationsPage() {
     onError: (e: Error) => toast.error(e.message),
   });
 
-  if (role !== "SUPER_ADMIN") return <Navigate to="/" replace />;
+  if (role !== "SUPER_ADMIN") {
+    return (
+      <div className="flex flex-col gap-6">
+        <PageHeader title="Integrations" icon={<Plug size={20} />} />
+        <div className="glass-card">
+          <EmptyState
+            icon={ShieldOff}
+            title="Super Admin only"
+            description="API keys, webhooks and the Master API are managed by your workspace's Super Admin."
+            action={
+              <Link to="/" className="btn-secondary">
+                Back to dashboard
+              </Link>
+            }
+          />
+        </div>
+      </div>
+    );
+  }
+  const forbidden = overview.error instanceof ApiError && overview.error.status === 403;
 
   const origin = window.location.origin;
   const base = `${origin}/api/master/v1`;
@@ -191,7 +211,13 @@ export default function IntegrationsPage() {
       />
 
       {overview.isError ? (
-        <QueryError error={overview.error} onRetry={() => overview.refetch()} />
+        <div className="glass-card">
+          {forbidden ? (
+            <EmptyState icon={ShieldOff} title="Super Admin only" description="Your account no longer has access to integrations." />
+          ) : (
+            <QueryError error={overview.error} onRetry={() => overview.refetch()} title="Couldn't load integrations" />
+          )}
+        </div>
       ) : (
         <>
           {/* Master API quick start */}
