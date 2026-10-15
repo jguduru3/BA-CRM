@@ -5,7 +5,11 @@ import com.betteranalytics.crm.entity.DeviceToken;
 import com.betteranalytics.crm.entity.User;
 import com.betteranalytics.crm.repository.AppNotificationRepository;
 import com.betteranalytics.crm.repository.DeviceTokenRepository;
+import com.betteranalytics.crm.permission.Action;
+import com.betteranalytics.crm.permission.PermissionService;
+import com.betteranalytics.crm.permission.ResourceType;
 import com.betteranalytics.crm.security.CurrentUser;
+import com.betteranalytics.crm.service.PushService;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
@@ -36,18 +40,38 @@ public class NotificationController {
     private final AppNotificationRepository notifRepo;
     private final DeviceTokenRepository     tokenRepo;
     private final CurrentUser               currentUser;
+    private final PermissionService         permissionService;
+    private final PushService               pushService;
 
     public NotificationController(AppNotificationRepository notifRepo,
-                                   DeviceTokenRepository tokenRepo,
-                                   CurrentUser currentUser) {
+                                  DeviceTokenRepository tokenRepo,
+                                  CurrentUser currentUser,
+                                  PermissionService permissionService,
+                                  PushService pushService) {
         this.notifRepo = notifRepo;
         this.tokenRepo = tokenRepo;
         this.currentUser = currentUser;
+        this.permissionService = permissionService;
+        this.pushService = pushService;
+    }
+
+    /** Notifications are personal: OWN scope on NOTIFICATION, checked against the caller themself. */
+    private User actor(Action action) {
+        User actor = currentUser.get();
+        permissionService.require(actor, action, ResourceType.NOTIFICATION, actor.getOrganizationId(), actor.getId());
+        return actor;
+    }
+
+    /** Whether server-side push (FCM HTTP v1) is configured — the client registers tokens only then. */
+    @GetMapping("/push-status")
+    public ResponseEntity<Map<String, Object>> pushStatus() {
+        actor(Action.VIEW);
+        return ResponseEntity.ok(Map.of("enabled", pushService.isEnabled()));
     }
 
     @GetMapping
     public ResponseEntity<List<AppNotification>> list(@RequestParam(defaultValue = "50") int limit) {
-        User actor = currentUser.get();
+        User actor = actor(Action.VIEW);
         int capped = Math.max(1, Math.min(limit, 500));
         return ResponseEntity.ok(
                 notifRepo.findByUserIdAndOrganizationIdOrderByReadAscCreatedAtDesc(
@@ -56,7 +80,7 @@ public class NotificationController {
 
     @GetMapping("/unread-count")
     public ResponseEntity<Map<String, Long>> unreadCount() {
-        User actor = currentUser.get();
+        User actor = actor(Action.VIEW);
         long count = notifRepo.countByUserIdAndOrganizationIdAndReadFalse(actor.getId(), actor.getOrganizationId());
         return ResponseEntity.ok(Map.of("count", count));
     }
@@ -64,14 +88,14 @@ public class NotificationController {
     @PostMapping("/read-all")
     @Transactional
     public ResponseEntity<Map<String, Object>> readAll() {
-        User actor = currentUser.get();
+        User actor = actor(Action.EDIT);
         int updated = notifRepo.markAllReadByUserId(actor.getId(), actor.getOrganizationId());
         return ResponseEntity.ok(Map.of("ok", true, "updated", updated));
     }
 
     @PatchMapping("/{id}")
     public ResponseEntity<AppNotification> markRead(@PathVariable Long id) {
-        User actor = currentUser.get();
+        User actor = actor(Action.EDIT);
         AppNotification n = notifRepo.findByIdAndUserIdAndOrganizationId(id, actor.getId(), actor.getOrganizationId())
                 .orElse(null);
         if (n == null) return ResponseEntity.notFound().build();
@@ -91,7 +115,7 @@ public class NotificationController {
     @PostMapping("/device-tokens")
     @Transactional
     public ResponseEntity<?> registerToken(@RequestBody Map<String, Object> body) {
-        User actor = currentUser.get();
+        User actor = actor(Action.EDIT);
         Object tokenObj = body == null ? null : body.get("token");
         Object platformObj = body == null ? null : body.get("platform");
         if (!(tokenObj instanceof String token) || token.isBlank() || token.length() > MAX_TOKEN_LENGTH) {
@@ -122,7 +146,7 @@ public class NotificationController {
     @DeleteMapping("/device-tokens/{token}")
     @Transactional
     public ResponseEntity<Void> removeToken(@PathVariable String token) {
-        User actor = currentUser.get();
+        User actor = actor(Action.EDIT);
         tokenRepo.deleteByUserIdAndToken(actor.getId(), token);
         return ResponseEntity.noContent().build();
     }

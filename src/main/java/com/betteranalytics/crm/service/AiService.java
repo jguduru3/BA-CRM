@@ -28,7 +28,7 @@ public class AiService {
 
     private static final Logger log = LoggerFactory.getLogger(AiService.class);
     public static final String DEFAULT_OPENAI_MODEL    = "gpt-4o-mini";
-    public static final String DEFAULT_ANTHROPIC_MODEL = "claude-haiku-4-5-20251001";
+    public static final String DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5-5";
     private static final String ANTHROPIC_VERSION      = "2023-06-01";
 
     private final OrgSettingsRepository settingsRepo;

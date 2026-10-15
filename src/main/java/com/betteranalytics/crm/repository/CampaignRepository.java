@@ -28,7 +28,12 @@ public interface CampaignRepository extends JpaRepository<Campaign, Long> {
     @Query("SELECT c.status FROM Campaign c WHERE c.id = :id")
     Optional<String> findStatusById(@Param("id") Long id);
 
-    /** Counter refresh as a targeted UPDATE so it never overwrites a concurrent status change. */
+    /**
+     * Counter refresh as a targeted UPDATE: it never overwrites a concurrent status
+     * change and deliberately does not bump the optimistic-lock version (counters
+     * are not user-editable, and Campaign uses @DynamicUpdate so user saves never
+     * write them back).
+     */
     @Transactional
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("UPDATE Campaign c SET c.sentCount = :sent, c.deliveredCount = :delivered, c.readCount = :read, " +
@@ -36,17 +41,17 @@ public interface CampaignRepository extends JpaRepository<Campaign, Long> {
     int updateCounts(@Param("id") Long id, @Param("sent") int sent, @Param("delivered") int delivered,
                      @Param("read") int read, @Param("failed") int failed, @Param("now") Instant now);
 
-    /** scheduled → running, only if still scheduled (scheduler; safe against concurrent cancel). */
+    /** scheduled → sending, only if still scheduled (scheduler; safe against a concurrent cancel). */
     @Transactional
     @Modifying(clearAutomatically = true, flushAutomatically = true)
-    @Query("UPDATE Campaign c SET c.status = 'running', c.startedAt = COALESCE(c.startedAt, :now), c.updatedAt = :now " +
-           "WHERE c.id = :id AND c.status = 'scheduled'")
-    int markScheduledRunning(@Param("id") Long id, @Param("now") Instant now);
+    @Query("UPDATE Campaign c SET c.status = 'sending', c.startedAt = COALESCE(c.startedAt, :now), c.updatedAt = :now, " +
+           "c.version = c.version + 1 WHERE c.id = :id AND c.status = 'scheduled'")
+    int markScheduledSending(@Param("id") Long id, @Param("now") Instant now);
 
-    /** running → completed, only if still running. */
+    /** sending → completed, only if still sending. */
     @Transactional
     @Modifying(clearAutomatically = true, flushAutomatically = true)
-    @Query("UPDATE Campaign c SET c.status = 'completed', c.completedAt = :now, c.updatedAt = :now " +
-           "WHERE c.id = :id AND c.status = 'running'")
+    @Query("UPDATE Campaign c SET c.status = 'completed', c.completedAt = :now, c.updatedAt = :now, " +
+           "c.version = c.version + 1 WHERE c.id = :id AND c.status = 'sending'")
     int markCompleted(@Param("id") Long id, @Param("now") Instant now);
 }

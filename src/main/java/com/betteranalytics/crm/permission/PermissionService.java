@@ -374,6 +374,22 @@ public class PermissionService {
         return list.stream().map(a -> maskActivityForResponse(actor, a)).collect(Collectors.toList());
     }
 
+    // ── WhatsApp message body masking (engagement) ──────────────────────────────
+    /**
+     * Conversation metadata (direction, status, timestamps, numbers) is visible to
+     * anyone with VIEW on WHATSAPP; the message body only to Manager+, the user who
+     * sent it, or the owner of the CRM record the message is linked to.
+     * relatedOwnerId = owner of message.relatedType/relatedId (null when unlinked),
+     * resolved by the caller in bulk.
+     */
+    public boolean canViewWhatsAppBody(User actor, WhatsAppMessage message, Long relatedOwnerId) {
+        Role r = actor.getRole();
+        if (r == Role.SUPER_ADMIN || r == Role.VP_SALES || r == Role.MANAGER) return true;
+        if (message == null) return false;
+        if (message.getSentBy() != null && message.getSentBy().equals(actor.getId())) return true;
+        return relatedOwnerId != null && relatedOwnerId.equals(actor.getId());
+    }
+
     // ── Response masking ─────────────────────────────────────────────────────────
     public Lead maskLeadForResponse(User actor, Lead lead) {
         if (lead == null) return null;

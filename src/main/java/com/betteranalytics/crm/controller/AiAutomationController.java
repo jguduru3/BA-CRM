@@ -1,11 +1,16 @@
 package com.betteranalytics.crm.controller;
 
 import com.betteranalytics.crm.entity.*;
+import com.betteranalytics.crm.permission.Action;
+import com.betteranalytics.crm.permission.PermissionService;
+import com.betteranalytics.crm.permission.ResourceType;
 import com.betteranalytics.crm.repository.*;
 import com.betteranalytics.crm.security.CurrentUser;
 import com.betteranalytics.crm.service.AiAutomationService;
+import com.betteranalytics.crm.service.AuditService;
 import com.betteranalytics.crm.service.EmailIntegrationService;
 import jakarta.mail.internet.InternetAddress;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
@@ -15,38 +20,35 @@ import java.time.Instant;
 import java.util.*;
 
 /**
- * AI Automation definitions and manual execution.
+ * AI Automation definitions, runs and SMTP/IMAP accounts.
+ * Permissions: ResourceType.AI_AUTOMATION (VIEW / CREATE / EDIT — also run and
+ * secret rotation — / DELETE: Manager+) and ResourceType.EMAIL_ACCOUNT
+ * (VP / Super Admin). custom_api / send_email / read_email automations are
+ * additionally limited to roles that may manage email accounts, and their config
+ * and run output are hidden from everyone else.
  *
- * GET    /api/ai-automations                    — list
- * POST   /api/ai-automations                    — create             (MANAGER+)
- * GET    /api/ai-automations/{id}               — get
- * PUT    /api/ai-automations/{id}               — partial update     (MANAGER+)
- * DELETE /api/ai-automations/{id}               — delete             (MANAGER+)
- * POST   /api/ai-automations/{id}/run           — manually trigger   (MANAGER+)
- * GET    /api/ai-automations/{id}/runs          — run history (?limit=1..200)
+ * GET    /api/ai-automations                      — list (?limit=1..500)
+ * POST   /api/ai-automations                      — create
+ * GET    /api/ai-automations/{id}                 — get
+ * PUT    /api/ai-automations/{id}                 — partial update
+ * DELETE /api/ai-automations/{id}                 — delete
+ * POST   /api/ai-automations/{id}/run             — manual run (synchronous, no transaction)
+ * GET    /api/ai-automations/{id}/runs            — run log (status, error, duration_ms; ?limit=1..200)
+ * POST   /api/ai-automations/{id}/webhook-secret  — (re)generate the webhook-trigger secret, shown once
+ * GET|POST|DELETE /api/ai-automations/email-accounts[/{id}]
  *
- * custom_api / send_email / read_email automations can only be created,
- * modified or deleted by SUPER_ADMIN / VP_SALES, and their config + run output
- * is only shown to those roles.
+ * Triggers: manual | scheduled (triggerConfigJson {"cron": "0 9 * * MON-FRI", "timezone": "UTC"},
+ * evaluated every minute) | webhook (POST /api/automations/{id}/hook, HMAC-signed — see
+ * AutomationWebhookController) | on_lead_created | on_stage_change | on_campaign_approved.
  *
- * Email accounts (SUPER_ADMIN / VP_SALES only):
- * GET    /api/ai-automations/email-accounts     — list email accounts
- * POST   /api/ai-automations/email-accounts     — add email account
- * DELETE /api/ai-automations/email-accounts/{id}
- *
- * Secrets are write-only: send "apiKey" (or legacy "apiKeyEncrypted") / "smtpPassword";
- * responses carry apiKeySet + apiKeyHint / smtpPasswordSet.
- *
- * Template variable reference:
- *   Use {{variable_name}} in prompts and config JSON.
- *   Pass {"context": {"name": "value"}} in the run body.
+ * Secrets are write-only: send "apiKey" (legacy "apiKeyEncrypted") / "smtpPassword";
+ * responses carry apiKeySet + apiKeyHint / smtpPasswordSet / webhookSecretSet. The
+ * webhook secret itself is returned only by create / rotate, exactly once.
  */
 @RestController
 @RequestMapping("/api/ai-automations")
 public class AiAutomationController {
 
-    private static final Set<Role> MANAGER_PLUS = EnumSet.of(Role.SUPER_ADMIN, Role.VP_SALES, Role.MANAGER);
-    private static final Set<Role> ADMINS = EnumSet.of(Role.SUPER_ADMIN, Role.VP_SALES);
     private static final int MAX_CONTEXT_KEYS = 100;
     private static final int MAX_CONTEXT_VALUE = 10_000;
 
@@ -54,32 +56,39 @@ public class AiAutomationController {
     private final AiAutomationRunRepository runRepo;
     private final EmailAccountRepository emailAccountRepo;
     private final AiAutomationService automationService;
+    private final PermissionService permissionService;
+    private final AuditService auditService;
     private final CurrentUser currentUser;
 
     public AiAutomationController(AiAutomationRepository automationRepo,
-                                   AiAutomationRunRepository runRepo,
-                                   EmailAccountRepository emailAccountRepo,
-                                   AiAutomationService automationService,
-                                   CurrentUser currentUser) {
+                                  AiAutomationRunRepository runRepo,
+                                  EmailAccountRepository emailAccountRepo,
+                                  AiAutomationService automationService,
+                                  PermissionService permissionService,
+                                  AuditService auditService,
+                                  CurrentUser currentUser) {
         this.automationRepo = automationRepo;
         this.runRepo = runRepo;
         this.emailAccountRepo = emailAccountRepo;
         this.automationService = automationService;
+        this.permissionService = permissionService;
+        this.auditService = auditService;
         this.currentUser = currentUser;
     }
 
     // ── Automation definitions ─────────────────────────────────────────────────
 
     @GetMapping
-    public List<Map<String, Object>> list() {
-        User actor = currentUser.get();
-        return automationRepo.findByOrganizationIdOrderByCreatedAtDesc(actor.getOrganizationId())
+    public List<Map<String, Object>> list(@RequestParam(defaultValue = "200") int limit) {
+        User actor = require(Action.VIEW);
+        return automationRepo.findByOrganizationIdOrderByCreatedAtDesc(actor.getOrganizationId(),
+                        PageRequest.of(0, Math.max(1, Math.min(500, limit))))
                 .stream().map(a -> view(a, actor)).toList();
     }
 
     @GetMapping("/{id}")
     public ResponseEntity<Map<String, Object>> get(@PathVariable Long id) {
-        User actor = currentUser.get();
+        User actor = require(Action.VIEW);
         return automationRepo.findByIdAndOrganizationId(id, actor.getOrganizationId())
                 .map(a -> ResponseEntity.ok(view(a, actor)))
                 .orElse(ResponseEntity.notFound().build());
@@ -87,15 +96,14 @@ public class AiAutomationController {
 
     @PostMapping
     public ResponseEntity<Map<String, Object>> create(@RequestBody Map<String, Object> body) {
-        User actor = currentUser.get();
-        requireRole(actor, MANAGER_PLUS, "MANAGER or above required to create automations");
+        User actor = require(Action.CREATE);
 
         AiAutomation a = new AiAutomation();
         a.setOrganizationId(actor.getOrganizationId());
         a.setName(requireName(str(body, "name")));
         a.setDescription(str(body, "description"));
         a.setTriggerType(str(body, "triggerType"));
-        a.setTriggerConfigJson(str(body, "triggerConfigJson"));
+        a.setTriggerConfigJson(blankToNull(str(body, "triggerConfigJson")));
         a.setActionType(str(body, "actionType"));
         a.setActionConfigJson(str(body, "actionConfigJson"));
         String provider = str(body, "apiProvider");
@@ -108,28 +116,39 @@ public class AiAutomationController {
         a.setActive(bool(body, "active", true));
 
         validate(a, actor);
+        String secret = null;
+        if ("webhook".equals(a.getTriggerType())) {
+            secret = AiAutomationService.generateWebhookSecret();
+            a.setWebhookSecret(secret);
+        }
         a.setCreatedBy(actor.getId());
         a.setRunCount(0);
         a.setLastRunAt(null);
         Instant now = Instant.now();
         a.setCreatedAt(now);
         a.setUpdatedAt(now);
-        return ResponseEntity.status(201).body(view(automationRepo.save(a), actor));
+        AiAutomation saved = automationRepo.save(a);
+        Map<String, Object> v = view(saved, actor);
+        auditService.log("create", "ai_automations", saved.getId(), saved.getName(), null, v);
+        if (secret != null) v.put("webhookSecret", secret);   // shown exactly once
+        return ResponseEntity.status(201).body(v);
     }
 
     @PutMapping("/{id}")
     public ResponseEntity<Map<String, Object>> update(@PathVariable Long id,
-                                                       @RequestBody Map<String, Object> body) {
-        User actor = currentUser.get();
-        requireRole(actor, MANAGER_PLUS, "MANAGER or above required to edit automations");
+                                                      @RequestBody Map<String, Object> body) {
+        User actor = require(Action.EDIT);
         AiAutomation existing = automationRepo.findByIdAndOrganizationId(id, actor.getOrganizationId()).orElse(null);
         if (existing == null) return ResponseEntity.notFound().build();
         requirePrivilegedAccess(actor, existing.getActionType());
+        Map<String, Object> before = view(existing, actor);
+        String oldTrigger = existing.getTriggerType();
+        String oldTriggerConfig = existing.getTriggerConfigJson();
 
         if (body.get("name") != null)              existing.setName(requireName(str(body, "name")));
         if (body.containsKey("description"))       existing.setDescription(str(body, "description"));
         if (body.get("triggerType") != null)       existing.setTriggerType(str(body, "triggerType"));
-        if (body.containsKey("triggerConfigJson")) existing.setTriggerConfigJson(str(body, "triggerConfigJson"));
+        if (body.containsKey("triggerConfigJson")) existing.setTriggerConfigJson(blankToNull(str(body, "triggerConfigJson")));
         if (body.get("actionType") != null)        existing.setActionType(str(body, "actionType"));
         if (body.get("actionConfigJson") != null)  existing.setActionConfigJson(str(body, "actionConfigJson"));
         if (body.get("apiProvider") != null)       existing.setApiProvider(str(body, "apiProvider"));
@@ -141,19 +160,55 @@ public class AiAutomationController {
         if (body.get("active") != null)            existing.setActive(bool(body, "active", existing.isActive()));
 
         validate(existing, actor);
+        // A new schedule starts counting from now, not from the old schedule's last fire.
+        if (!Objects.equals(oldTrigger, existing.getTriggerType())
+                || !Objects.equals(oldTriggerConfig, existing.getTriggerConfigJson())) {
+            existing.setScheduleLastFiredAt(null);
+        }
+        String secret = null;
+        if ("webhook".equals(existing.getTriggerType()) && existing.getWebhookSecret() == null) {
+            secret = AiAutomationService.generateWebhookSecret();
+            existing.setWebhookSecret(secret);
+        }
         existing.setUpdatedAt(Instant.now());
-        return ResponseEntity.ok(view(automationRepo.save(existing), actor));
+        AiAutomation saved = automationRepo.save(existing);
+        Map<String, Object> v = view(saved, actor);
+        auditService.log("update", "ai_automations", saved.getId(), saved.getName(), before, v);
+        if (secret != null) v.put("webhookSecret", secret);
+        return ResponseEntity.ok(v);
     }
 
     @DeleteMapping("/{id}")
     public ResponseEntity<?> delete(@PathVariable Long id) {
-        User actor = currentUser.get();
-        requireRole(actor, MANAGER_PLUS, "MANAGER or above required to delete automations");
+        User actor = require(Action.DELETE);
         AiAutomation existing = automationRepo.findByIdAndOrganizationId(id, actor.getOrganizationId()).orElse(null);
         if (existing == null) return ResponseEntity.notFound().build();
         requirePrivilegedAccess(actor, existing.getActionType());
         automationRepo.delete(existing);
+        auditService.log("delete", "ai_automations", existing.getId(), existing.getName(), view(existing, actor), null);
         return ResponseEntity.ok(Map.of("ok", true));
+    }
+
+    /** Generates (or rotates) the webhook-trigger secret; the old one stops working immediately. */
+    @PostMapping("/{id}/webhook-secret")
+    public ResponseEntity<Map<String, Object>> rotateWebhookSecret(@PathVariable Long id) {
+        User actor = require(Action.EDIT);
+        AiAutomation a = automationRepo.findByIdAndOrganizationId(id, actor.getOrganizationId()).orElse(null);
+        if (a == null) return ResponseEntity.notFound().build();
+        requirePrivilegedAccess(actor, a.getActionType());
+        if (!"webhook".equals(a.getTriggerType()))
+            throw new IllegalStateException("Only webhook-triggered automations have a webhook secret");
+        String secret = AiAutomationService.generateWebhookSecret();
+        a.setWebhookSecret(secret);
+        a.setUpdatedAt(Instant.now());
+        automationRepo.save(a);
+        auditService.log("rotate_webhook_secret", "ai_automations", a.getId(), a.getName(), null, null);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("webhookSecret", secret);
+        out.put("hookPath", hookPath(a));
+        out.put("signature", "X-Signature: sha256=hex(HMAC_SHA256(secret, X-Timestamp + \".\" + body)); "
+                + "X-Timestamp: unix seconds, within 5 minutes");
+        return ResponseEntity.ok(out);
     }
 
     // ── Manual execution ───────────────────────────────────────────────────────
@@ -162,8 +217,10 @@ public class AiAutomationController {
     public ResponseEntity<AiAutomationRun> run(
             @PathVariable Long id,
             @RequestBody(required = false) Map<String, Object> body) {
-        User actor = currentUser.get();
-        requireRole(actor, MANAGER_PLUS, "MANAGER or above required to run automations");
+        User actor = require(Action.EDIT);
+        AiAutomation a = automationRepo.findByIdAndOrganizationId(id, actor.getOrganizationId()).orElse(null);
+        if (a == null) return ResponseEntity.notFound().build();
+        requirePrivilegedAccess(actor, a.getActionType());
         Map<String, String> context = new HashMap<>();
         Object raw = body != null ? body.get("context") : null;
         if (raw != null) {
@@ -179,15 +236,14 @@ public class AiAutomationController {
                 context.put(String.valueOf(e.getKey()), s);
             }
         }
-        AiAutomationRun run = automationService.executeManual(id, actor.getOrganizationId(),
-                actor.getId(), context);
+        AiAutomationRun run = automationService.executeManual(id, actor.getOrganizationId(), actor.getId(), context);
         return ResponseEntity.ok(run);
     }
 
     @GetMapping("/{id}/runs")
     public ResponseEntity<List<AiAutomationRun>> getRuns(@PathVariable Long id,
                                                          @RequestParam(defaultValue = "50") int limit) {
-        User actor = currentUser.get();
+        User actor = require(Action.VIEW);
         AiAutomation a = automationRepo.findByIdAndOrganizationId(id, actor.getOrganizationId()).orElse(null);
         if (a == null) return ResponseEntity.notFound().build();
         // Run output of email/API automations can contain mailbox contents or third-party data.
@@ -201,16 +257,17 @@ public class AiAutomationController {
     @GetMapping("/email-accounts")
     public List<EmailAccount> listEmailAccounts() {
         User actor = currentUser.get();
-        requireRole(actor, ADMINS, "Admin or VP_SALES required");
+        permissionService.require(actor, Action.VIEW, ResourceType.EMAIL_ACCOUNT, actor.getOrganizationId(), null);
         return emailAccountRepo.findByOrganizationIdAndIsActiveTrue(actor.getOrganizationId());
     }
 
     @PostMapping("/email-accounts")
     public ResponseEntity<EmailAccount> addEmailAccount(@RequestBody EmailAccount body) {
         User actor = currentUser.get();
-        requireRole(actor, ADMINS, "Admin or VP_SALES required");
+        permissionService.require(actor, Action.CREATE, ResourceType.EMAIL_ACCOUNT, actor.getOrganizationId(), null);
 
-        // Build from allow-listed, validated fields.
+        // Built from allow-listed, validated fields. The password is encrypted at rest
+        // (EncryptedStringConverter) and never serialized back (smtpPasswordSet instead).
         EmailAccount a = new EmailAccount();
         a.setOrganizationId(actor.getOrganizationId());
         a.setUserId(actor.getId());
@@ -231,44 +288,64 @@ public class AiAutomationController {
         a.setImapSsl(body.isImapSsl());
         a.setActive(true);
         a.setCreatedAt(Instant.now());
-        return ResponseEntity.status(201).body(emailAccountRepo.save(a));
+        EmailAccount saved;
+        try {
+            saved = emailAccountRepo.saveAndFlush(a);
+        } catch (DataIntegrityViolationException e) {
+            throw new IllegalStateException("This email address is already connected");
+        }
+        auditService.log("create", "email_accounts", saved.getId(), saved.getEmailAddress(), null,
+                Map.of("emailAddress", saved.getEmailAddress(), "smtpHost", saved.getSmtpHost()));
+        return ResponseEntity.status(201).body(saved);
     }
 
     @DeleteMapping("/email-accounts/{accountId}")
     public ResponseEntity<?> deleteEmailAccount(@PathVariable Long accountId) {
         User actor = currentUser.get();
-        requireRole(actor, ADMINS, "Admin or VP_SALES required");
+        permissionService.require(actor, Action.DELETE, ResourceType.EMAIL_ACCOUNT, actor.getOrganizationId(), null);
         EmailAccount existing = emailAccountRepo.findByIdAndOrganizationId(
                 accountId, actor.getOrganizationId()).orElse(null);
         if (existing == null) return ResponseEntity.notFound().build();
         emailAccountRepo.delete(existing);
+        auditService.log("delete", "email_accounts", existing.getId(), existing.getEmailAddress(),
+                Map.of("emailAddress", existing.getEmailAddress()), null);
         return ResponseEntity.ok(Map.of("ok", true));
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────────
 
+    private User require(Action action) {
+        User actor = currentUser.get();
+        permissionService.require(actor, action, ResourceType.AI_AUTOMATION, actor.getOrganizationId(), null);
+        return actor;
+    }
+
     private void validate(AiAutomation a, User actor) {
         requirePrivilegedAccess(actor, a.getActionType());
         automationService.validateDefinition(a.getTriggerType(), a.getActionType(), a.getActionConfigJson(),
                 a.getApiProvider(), a.getModelId());
+        automationService.validateTrigger(a.getTriggerType(), a.getTriggerConfigJson());
         automationService.requireEmailAccountInOrg(a.getActionConfigJson(), actor.getOrganizationId());
     }
 
-    private static void requireRole(User actor, Set<Role> roles, String message) {
-        if (!roles.contains(actor.getRole())) throw new AccessDeniedException(message);
+    /** Email / custom-API automations: only roles that may manage email accounts (VP / Super Admin). */
+    private boolean privileged(User actor) {
+        return permissionService.can(actor, Action.CREATE, ResourceType.EMAIL_ACCOUNT, actor.getOrganizationId(), null);
     }
 
-    private static void requirePrivilegedAccess(User actor, String actionType) {
-        if (actionType != null && AiAutomationService.PRIVILEGED_ACTION_TYPES.contains(actionType)
-                && !ADMINS.contains(actor.getRole())) {
+    private void requirePrivilegedAccess(User actor, String actionType) {
+        if (actionType != null && AiAutomationService.PRIVILEGED_ACTION_TYPES.contains(actionType) && !privileged(actor)) {
             throw new AccessDeniedException("Only SUPER_ADMIN or VP_SALES can manage " + actionType + " automations");
         }
     }
 
-    /** Response shape — never includes the API key; hides privileged configs from non-admins. */
-    private static Map<String, Object> view(AiAutomation a, User actor) {
-        boolean redact = AiAutomationService.PRIVILEGED_ACTION_TYPES.contains(a.getActionType())
-                && !ADMINS.contains(actor.getRole());
+    private static String hookPath(AiAutomation a) {
+        return "/api/automations/" + a.getId() + "/hook";
+    }
+
+    /** Response shape — never includes the API key or webhook secret; hides privileged configs from non-admins. */
+    private Map<String, Object> view(AiAutomation a, User actor) {
+        boolean redact = AiAutomationService.PRIVILEGED_ACTION_TYPES.contains(a.getActionType()) && !privileged(actor);
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", a.getId());
         m.put("organizationId", a.getOrganizationId());
@@ -285,6 +362,18 @@ public class AiAutomationController {
         m.put("active", a.isActive());
         m.put("runCount", a.getRunCount());
         m.put("lastRunAt", a.getLastRunAt());
+        boolean webhook = "webhook".equals(a.getTriggerType());
+        m.put("webhookSecretSet", webhook && a.getWebhookSecret() != null && !a.getWebhookSecret().isBlank());
+        m.put("hookPath", webhook ? hookPath(a) : null);
+        Instant nextRun = null;
+        if ("scheduled".equals(a.getTriggerType()) && a.isActive()) {
+            try {
+                Instant base = a.getScheduleLastFiredAt() != null ? a.getScheduleLastFiredAt()
+                        : (a.getUpdatedAt() != null ? a.getUpdatedAt() : Instant.now());
+                nextRun = AiAutomationService.nextFire(automationService.schedule(a.getTriggerConfigJson()), base);
+            } catch (IllegalArgumentException ignored) { }
+        }
+        m.put("nextRunAt", nextRun);
         m.put("createdBy", a.getCreatedBy());
         m.put("createdAt", a.getCreatedAt());
         m.put("updatedAt", a.getUpdatedAt());
@@ -304,6 +393,10 @@ public class AiAutomationController {
         if (v == null) return null;
         if (v instanceof String s) return s;
         throw new IllegalArgumentException(field + " must be a string");
+    }
+
+    private static String blankToNull(String s) {
+        return s == null || s.isBlank() ? null : s;
     }
 
     private static boolean bool(Map<String, Object> body, String field, boolean def) {

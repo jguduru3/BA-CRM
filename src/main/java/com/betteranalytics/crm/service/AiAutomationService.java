@@ -16,7 +16,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.core.task.TaskRejectedException;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.scheduling.support.CronExpression;
 import org.springframework.http.*;
 import org.springframework.http.client.ClientHttpResponse;
 import org.springframework.stereotype.Service;
@@ -27,11 +30,19 @@ import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.ResponseErrorHandler;
 import org.springframework.web.client.RestTemplate;
 
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 import java.io.InputStream;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.SecureRandom;
+import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
 import java.util.*;
 import java.util.regex.*;
 
@@ -71,7 +82,7 @@ public class AiAutomationService {
     private static final String ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
     private static final String ANTHROPIC_VERSION = "2023-06-01";
     private static final String OPENAI_URL = "https://api.openai.com/v1/chat/completions";
-    public static final String DEFAULT_ANTHROPIC_MODEL = "claude-opus-5-5";
+    public static final String DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5-5";
     public static final String DEFAULT_OPENAI_MODEL = "gpt-4o";
     private static final Pattern TEMPLATE_VAR = Pattern.compile("\\{\\{([^}]+)}}");
     private static final Pattern SINGLE_VAR = Pattern.compile("^\\s*\\{\\{([^}]+)}}\\s*$");
@@ -167,6 +178,168 @@ public class AiAutomationService {
         }
     }
 
+    /** Trigger config must be valid for its trigger type ("scheduled" needs a parseable cron). */
+    public void validateTrigger(String triggerType, String triggerConfigJson) {
+        if ("scheduled".equals(triggerType)) schedule(triggerConfigJson);
+        else if (triggerConfigJson != null && !triggerConfigJson.isBlank()) {
+            try { objectMapper.readTree(triggerConfigJson); }
+            catch (Exception e) { throw new IllegalArgumentException("triggerConfigJson must be valid JSON"); }
+        }
+    }
+
+    // ── Scheduled (cron) trigger ──────────────────────────────────────────────
+
+    public record Schedule(CronExpression cron, ZoneId zone) {}
+
+    /**
+     * Parses {"cron": "0 9 * * MON-FRI", "timezone": "Asia/Kolkata"} from trigger_config_json.
+     * Accepts standard 5-field cron (minute precision) or Spring's 6-field form
+     * (seconds first). Timezone defaults to UTC. Problems → IllegalArgumentException (400).
+     */
+    public Schedule schedule(String triggerConfigJson) {
+        Map<String, Object> cfg = parseJson(triggerConfigJson);
+        String expr = str(cfg, "cron", null);
+        if (expr == null || expr.isBlank())
+            throw new IllegalArgumentException("A scheduled automation needs triggerConfigJson {\"cron\": \"0 9 * * MON-FRI\"}");
+        String e = expr.trim();
+        if (e.split("\\s+").length == 5) e = "0 " + e;
+        CronExpression cron;
+        try {
+            cron = CronExpression.parse(e);
+        } catch (IllegalArgumentException ex) {
+            throw new IllegalArgumentException("cron is not a valid cron expression: " + ex.getMessage());
+        }
+        String tz = str(cfg, "timezone", null);
+        ZoneId zone;
+        try {
+            zone = tz == null || tz.isBlank() ? ZoneOffset.UTC : ZoneId.of(tz.trim());
+        } catch (Exception ex) {
+            throw new IllegalArgumentException("timezone is not a valid time zone id");
+        }
+        return new Schedule(cron, zone);
+    }
+
+    /** Next fire time strictly after {@code after}, or null when the cron never fires again. */
+    public static Instant nextFire(Schedule s, Instant after) {
+        ZonedDateTime next = s.cron().next(after.atZone(s.zone()));
+        return next == null ? null : next.toInstant();
+    }
+
+    /**
+     * Every minute, cluster-wide once (ShedLock): fires active "scheduled"
+     * automations whose next cron time (after the last fire, or after the last
+     * edit) has passed. Missed slots (downtime) fire once, not once per slot.
+     * Runs are queued on the bounded executor — this job never calls AI/HTTP itself.
+     */
+    @Scheduled(fixedDelayString = "${app.automations.scheduler-delay-ms:60000}",
+               initialDelayString = "${app.automations.scheduler-initial-delay-ms:45000}")
+    @SchedulerLock(name = "automations.cron", lockAtMostFor = "PT5M")
+    public void runDueScheduled() {
+        try {
+            fireDueScheduled(Instant.now());
+        } catch (Exception e) {
+            log.error("Automation cron scan failed: {}", e.toString(), e);
+        }
+    }
+
+    /** Returns how many automations were queued (exposed for tests). */
+    public int fireDueScheduled(Instant now) {
+        int queued = 0;
+        for (AiAutomation a : automationRepo.findByTriggerTypeAndIsActiveTrue("scheduled")) {
+            try {
+                Schedule s = schedule(a.getTriggerConfigJson());
+                Instant base = a.getScheduleLastFiredAt() != null ? a.getScheduleLastFiredAt()
+                        : (a.getUpdatedAt() != null ? a.getUpdatedAt() : a.getCreatedAt());
+                if (base == null) base = now.minus(Duration.ofMinutes(1));
+                Instant next = nextFire(s, base);
+                if (next == null || next.isAfter(now)) continue;
+                int claimed = a.getScheduleLastFiredAt() == null
+                        ? automationRepo.claimFirstScheduledFire(a.getId(), now)
+                        : automationRepo.claimScheduledFire(a.getId(), a.getScheduleLastFiredAt(), now);
+                if (claimed != 1) continue;
+                Map<String, String> ctx = new HashMap<>();
+                ctx.put("schedule.firedAt", now.toString());
+                ctx.put("schedule.slot", next.toString());
+                runAsync(a.getId(), a.getOrganizationId(), ctx, "scheduled");
+                queued++;
+            } catch (IllegalArgumentException bad) {
+                log.warn("Scheduled automation {} has an invalid schedule: {}", a.getId(), bad.getMessage());
+            }
+        }
+        return queued;
+    }
+
+    // ── Webhook trigger ───────────────────────────────────────────────────────
+
+    private static final SecureRandom RANDOM = new SecureRandom();
+    public static final Duration WEBHOOK_TOLERANCE = Duration.ofMinutes(5);
+
+    /** New random per-automation HMAC secret (shown to the user once). */
+    public static String generateWebhookSecret() {
+        byte[] b = new byte[32];
+        RANDOM.nextBytes(b);
+        return "whsec_" + HexFormat.of().formatHex(b);
+    }
+
+    /**
+     * X-Signature: sha256=hex(HMAC-SHA256(secret, timestamp + "." + rawBody)),
+     * X-Timestamp: unix seconds within ±5 minutes of now. Constant-time compare.
+     */
+    public static boolean verifyWebhookSignature(String secret, String timestampHeader, byte[] rawBody,
+                                                 String signatureHeader, Instant now) {
+        if (secret == null || secret.isBlank() || timestampHeader == null || signatureHeader == null) return false;
+        long ts;
+        try {
+            ts = Long.parseLong(timestampHeader.trim());
+        } catch (NumberFormatException e) {
+            return false;
+        }
+        if (Math.abs(now.getEpochSecond() - ts) > WEBHOOK_TOLERANCE.toSeconds()) return false;
+        String sig = signatureHeader.trim();
+        if (!sig.startsWith("sha256=")) return false;
+        byte[] provided;
+        try {
+            provided = HexFormat.of().parseHex(sig.substring(7));
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+        byte[] expected = webhookSignature(secret, timestampHeader.trim(), rawBody);
+        return MessageDigest.isEqual(expected, provided);
+    }
+
+    public static byte[] webhookSignature(String secret, String timestamp, byte[] rawBody) {
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+            mac.update(timestamp.getBytes(StandardCharsets.UTF_8));
+            mac.update((byte) '.');
+            mac.update(rawBody != null ? rawBody : new byte[0]);
+            return mac.doFinal();
+        } catch (Exception e) {
+            throw new IllegalStateException("HMAC unavailable", e);
+        }
+    }
+
+    /** Queue one run on the bounded executor (after commit when a transaction is active). */
+    public void runAsync(Long automationId, Long orgId, Map<String, String> context, String source) {
+        Map<String, String> ctx = context != null ? new HashMap<>(context) : new HashMap<>();
+        Runnable submit = () -> {
+            try {
+                executor.submit("automation-" + source + "-" + automationId,
+                        () -> execute(automationId, orgId, null, ctx, source));
+            } catch (TaskRejectedException e) {
+                log.warn("Dropped {} run of automation {}: executor queue full", source, automationId);
+            }
+        };
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override public void afterCommit() { submit.run(); }
+            });
+        } else {
+            submit.run();
+        }
+    }
+
     /** Email account referenced by a definition must belong to the org. */
     public void requireEmailAccountInOrg(String actionConfigJson, Long orgId) {
         Long accountId = longVal(parseJson(actionConfigJson), "emailAccountId");
@@ -180,10 +353,8 @@ public class AiAutomationService {
      * Event-driven firing — called from domain code (lead created, stage
      * changed, campaign approved...). Never blocks or fails the caller: the
      * work is queued on the bounded integration executor, after the caller's
-     * transaction commits when one is active. Each automation is isolated.
-     *
-     * NOTE: "scheduled" (cron) triggers are stored and runnable manually via
-     * POST /api/ai-automations/{id}/run, but nothing polls them yet.
+     * transaction commits when one is active. Each automation is isolated and
+     * every run is logged (status, error, duration_ms).
      */
     public void fireEvent(Long orgId, String triggerType, Map<String, String> context) {
         Map<String, String> ctx = context != null ? new HashMap<>(context) : new HashMap<>();
@@ -209,7 +380,7 @@ public class AiAutomationService {
         List<AiAutomation> matches = automationRepo.findByOrganizationIdAndTriggerTypeAndIsActiveTrue(orgId, triggerType);
         for (AiAutomation automation : matches) {
             try {
-                executeManual(automation.getId(), orgId, null, ctx);
+                execute(automation.getId(), orgId, null, ctx, "event");
             } catch (Exception e) {
                 log.warn("Event-fired automation {} ({}) failed for org {}: {}",
                         automation.getId(), triggerType, orgId, e.toString());
@@ -226,6 +397,16 @@ public class AiAutomationService {
      */
     public AiAutomationRun executeManual(Long automationId, Long orgId,
                                           Long triggeredBy, Map<String, String> context) {
+        return execute(automationId, orgId, triggeredBy, context, "manual");
+    }
+
+    /**
+     * Runs one automation and records the run (status, output, error, duration_ms,
+     * trigger source). Never called inside a DB transaction: the run row is saved,
+     * the provider / HTTP / SMTP call happens with timeouts, then the row is updated.
+     */
+    public AiAutomationRun execute(Long automationId, Long orgId, Long triggeredBy,
+                                   Map<String, String> context, String source) {
         AiAutomation automation = automationRepo.findByIdAndOrganizationId(automationId, orgId)
                 .orElseThrow(() -> new NoSuchElementException("Automation not found"));
         Map<String, String> ctx = context != null ? context : Map.of();
@@ -236,6 +417,8 @@ public class AiAutomationService {
         run.setStatus("running");
         run.setStartedAt(Instant.now());
         run.setTriggeredBy(triggeredBy);
+        run.setTriggerSource(source);
+        long t0 = System.nanoTime();
         try { run.setTriggerPayloadJson(objectMapper.writeValueAsString(ctx)); } catch (Exception ignored) {}
         run = runRepo.save(run);
 
@@ -251,6 +434,7 @@ public class AiAutomationService {
             run.setErrorMessage(safeError(e));
         }
         run.setCompletedAt(Instant.now());
+        run.setDurationMs((System.nanoTime() - t0) / 1_000_000);
         run = runRepo.save(run);
 
         automationRepo.recordRun(automationId, Instant.now());

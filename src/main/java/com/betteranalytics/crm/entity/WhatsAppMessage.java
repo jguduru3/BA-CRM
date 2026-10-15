@@ -76,6 +76,21 @@ public class WhatsAppMessage {
     @Column(name = "campaign_id")
     private Long campaignId;
 
+    // Counterparty number in E.164 with leading '+' (V30) — indexed thread lookups.
+    @Column(name = "normalized_phone", length = 20)
+    private String normalizedPhone;
+
+    @Column(name = "delivered_at")
+    private Instant deliveredAt;
+
+    @Column(name = "read_at")
+    private Instant readAt;
+
+    // Response-only field mask flag: true when the body was withheld from the viewer
+    // (PermissionService.canViewWhatsAppBody).
+    @Transient
+    private boolean bodyHidden;
+
     @Column(name = "created_at", updatable = false)
     private Instant createdAt;
 

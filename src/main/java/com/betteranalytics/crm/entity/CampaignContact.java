@@ -32,7 +32,7 @@ public class CampaignContact {
     @Column(length = 200)
     private String name;
 
-    // pending | sent | delivered | read | failed | opted_out
+    // pending | sending | sent | delivered | read | failed | skipped_opted_out | skipped
     @Column(nullable = false, length = 20)
     private String status = "pending";
 
@@ -50,6 +50,17 @@ public class CampaignContact {
 
     @Column(name = "failed_reason", length = 300)
     private String failedReason;
+
+    // E.164 with leading '+' (V30). Unique per campaign — a number is never messaged twice.
+    @Column(name = "normalized_phone", length = 20)
+    private String normalizedPhone;
+
+    // When a dispatcher claimed this recipient ('sending'); stale claims are reset.
+    @Column(name = "claimed_at")
+    private Instant claimedAt;
+
+    @Column(name = "updated_at")
+    private Instant updatedAt;
 
     @Column(name = "created_at", updatable = false)
     private Instant createdAt;
