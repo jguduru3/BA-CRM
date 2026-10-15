@@ -1,0 +1,387 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ───────────────────────────────────────────────────────────────────────
+   Design tokens — Fluent-style acrylic surfaces + the validated dataviz
+   palette (series-1 blue doubles as the brand hue, so UI chrome and charts
+   read as one system). Light is the default; dark is opt-in via
+   [data-theme="dark"] or prefers-color-scheme.
+   ─────────────────────────────────────────────────────────────────────── */
+:root {
+  color-scheme: light;
+
+  /* page + surfaces */
+  --plane: #f3f6fa;
+  --plane-2: #eaf0f7;
+  --surface: 255 255 255;           /* rgb triplet for alpha composition */
+  --surface-solid: #ffffff;
+  --surface-sunken: #f6f8fb;
+  --panel-border: 15 23 42;         /* slate-900 triplet, used at low alpha */
+  --panel-glass-alpha: 0.66;
+  --panel-glass-border-alpha: 0.08;
+
+  /* ink */
+  --ink-primary: #0b1220;
+  --ink-secondary: #4b5565;
+  --ink-muted: #8793a3;
+  --ink-inverse: #ffffff;
+
+  /* brand */
+  --brand-50: #eef9ff;
+  --brand-500: #1ca3e6;
+  --brand-600: #0f84c4;
+  --brand-700: #0d699e;
+  --brand-gradient: linear-gradient(135deg, #22b6f0 0%, #1ca3e6 45%, #0d699e 100%);
+
+  /* status / stage */
+  --good: #0ca30c;
+  --warning: #c98500;
+  --serious: #ec835a;
+  --critical: #d03b3b;
+
+  /* chart series (validated — see dataviz skill) */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #4a3aa7;
+  --series-8: #e34948;
+  --chart-grid: #e1e0d9;
+  --chart-axis: #c3c2b7;
+
+  --ring-brand: 28 163 230;
+  --shadow-color: 15 23 42;
+}
+
+:root[data-theme="dark"],
+:root:not([data-theme="light"]) {
+  @media (prefers-color-scheme: dark) {
+    color-scheme: dark;
+  }
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --plane: #0a0f1a;
+  --plane-2: #0c1322;
+  --surface: 20 28 44;
+  --surface-solid: #10182a;
+  --surface-sunken: #0c1322;
+  --panel-border: 255 255 255;
+  --panel-glass-alpha: 0.5;
+  --panel-glass-border-alpha: 0.09;
+
+  --ink-primary: #f3f6fb;
+  --ink-secondary: #aab3c5;
+  --ink-muted: #727e92;
+  --ink-inverse: #0b1220;
+
+  --brand-50: #0d2235;
+  --brand-500: #3fb4ef;
+  --brand-600: #1ca3e6;
+  --brand-700: #0f84c4;
+  --brand-gradient: linear-gradient(135deg, #3fc2f5 0%, #3fb4ef 45%, #1a7fb8 100%);
+
+  --good: #0ca30c;
+  --warning: #d7a300;
+  --serious: #ef9068;
+  --critical: #e66767;
+
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+  --series-8: #e66767;
+  --chart-grid: #232a3a;
+  --chart-axis: #3a4457;
+
+  --shadow-color: 0 0 0;
+}
+
+* {
+  border-color: rgb(var(--panel-border) / var(--panel-glass-border-alpha));
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background-color: var(--plane);
+  color: var(--ink-primary);
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Ambient mesh backdrop for the app shell — faint, not decorative-garish */
+.app-mesh {
+  background-image:
+    radial-gradient(60rem 36rem at -10% -15%, rgb(var(--ring-brand) / 0.10), transparent 60%),
+    radial-gradient(50rem 30rem at 110% 0%, rgb(var(--ring-brand) / 0.07), transparent 55%),
+    radial-gradient(70rem 40rem at 50% 120%, rgb(var(--ring-brand) / 0.06), transparent 60%);
+  background-color: var(--plane);
+}
+
+/* ── Glass surfaces ────────────────────────────────────────────────── */
+.glass {
+  background-color: rgb(var(--surface) / var(--panel-glass-alpha));
+  backdrop-filter: blur(20px) saturate(1.5);
+  -webkit-backdrop-filter: blur(20px) saturate(1.5);
+  border: 1px solid rgb(var(--panel-border) / var(--panel-glass-border-alpha));
+}
+
+.glass-strong {
+  background-color: rgb(var(--surface) / 0.86);
+  backdrop-filter: blur(28px) saturate(1.6);
+  -webkit-backdrop-filter: blur(28px) saturate(1.6);
+  border: 1px solid rgb(var(--panel-border) / var(--panel-glass-border-alpha));
+}
+
+.glass-solid {
+  background-color: var(--surface-solid);
+  border: 1px solid rgb(var(--panel-border) / var(--panel-glass-border-alpha));
+}
+
+.glass-card {
+  @apply glass rounded-2xl shadow-glass transition-all duration-200;
+}
+
+.glass-card-hover {
+  @apply glass-card;
+}
+.glass-card-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 2px 4px rgba(var(--shadow-color), 0.05), 0 20px 40px -16px rgb(var(--ring-brand) / 0.28);
+  border-color: rgb(var(--ring-brand) / 0.28);
+}
+
+/* top hairline "reveal" highlight, a Fluent acrylic signature */
+.glass-reveal {
+  position: relative;
+}
+.glass-reveal::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.5), transparent);
+  border-radius: inherit;
+}
+
+/* ── Scrollbars ────────────────────────────────────────────────────── */
+.thin-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.thin-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.thin-scroll::-webkit-scrollbar-thumb {
+  background: rgb(var(--panel-border) / 0.16);
+  border-radius: 999px;
+}
+.thin-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--panel-border) / 0.28);
+}
+
+/* ── Focus ring ────────────────────────────────────────────────────── */
+.focus-brand:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgb(var(--ring-brand) / 0.35);
+}
+
+/* ── Buttons ───────────────────────────────────────────────────────── */
+.btn {
+  @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium
+    transition-all duration-150 select-none disabled:opacity-50 disabled:pointer-events-none focus-brand;
+}
+.btn-primary {
+  @apply btn text-white shadow-glow-brand;
+  background-image: var(--brand-gradient);
+}
+.btn-primary:hover {
+  filter: brightness(1.06);
+  transform: translateY(-1px);
+}
+.btn-primary:active {
+  transform: translateY(0);
+  filter: brightness(0.98);
+}
+.btn-secondary {
+  @apply btn glass-solid;
+  color: var(--ink-primary);
+}
+.btn-secondary:hover {
+  background-color: rgb(var(--ring-brand) / 0.08);
+  border-color: rgb(var(--ring-brand) / 0.3);
+}
+.btn-ghost {
+  @apply btn;
+  color: var(--ink-secondary);
+}
+.btn-ghost:hover {
+  background-color: rgb(var(--panel-border) / 0.06);
+  color: var(--ink-primary);
+}
+.btn-danger {
+  @apply btn;
+  color: #fff;
+  background-color: var(--critical);
+}
+.btn-danger:hover {
+  filter: brightness(1.08);
+}
+.btn-icon {
+  @apply inline-flex items-center justify-center rounded-lg h-9 w-9 shrink-0 transition-all duration-150 focus-brand;
+  color: var(--ink-secondary);
+}
+.btn-icon:hover {
+  background-color: rgb(var(--panel-border) / 0.07);
+  color: var(--ink-primary);
+}
+
+/* ── Form controls ─────────────────────────────────────────────────── */
+.field-label {
+  @apply block text-xs font-semibold uppercase tracking-wide mb-1.5;
+  color: var(--ink-muted);
+}
+.input,
+.select,
+.textarea {
+  @apply w-full rounded-lg px-3 py-2 text-sm transition-all duration-150 focus-brand;
+  background-color: rgb(var(--surface) / 0.7);
+  border: 1px solid rgb(var(--panel-border) / 0.12);
+  color: var(--ink-primary);
+}
+.input::placeholder,
+.textarea::placeholder {
+  color: var(--ink-muted);
+}
+.input:hover,
+.select:hover,
+.textarea:hover {
+  border-color: rgb(var(--panel-border) / 0.22);
+}
+.input:focus,
+.select:focus,
+.textarea:focus {
+  border-color: rgb(var(--ring-brand) / 0.55);
+  background-color: var(--surface-solid);
+}
+.textarea {
+  resize: vertical;
+  min-height: 5rem;
+}
+.checkbox {
+  @apply h-4 w-4 rounded accent-[var(--brand-500)];
+}
+
+/* ── Badges / pills ────────────────────────────────────────────────── */
+.badge {
+  @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold leading-5 whitespace-nowrap;
+}
+.badge-neutral {
+  @apply badge;
+  background-color: rgb(var(--panel-border) / 0.08);
+  color: var(--ink-secondary);
+}
+.badge-brand {
+  @apply badge;
+  background-color: rgb(var(--ring-brand) / 0.12);
+  color: var(--brand-700, var(--brand-600));
+}
+.badge-good {
+  @apply badge;
+  background-color: rgb(12 163 12 / 0.12);
+  color: var(--good);
+}
+.badge-warning {
+  @apply badge;
+  background-color: rgb(201 133 0 / 0.14);
+  color: var(--warning);
+}
+.badge-critical {
+  @apply badge;
+  background-color: rgb(208 59 59 / 0.12);
+  color: var(--critical);
+}
+
+/* ── Kanban (Notion-style boards) ─────────────────────────────────── */
+.kanban-track {
+  @apply flex gap-4 overflow-x-auto thin-scroll pb-4;
+  scroll-snap-type: x proximity;
+}
+.kanban-column {
+  @apply flex flex-col shrink-0 rounded-2xl;
+  width: 304px;
+  background-color: rgb(var(--panel-border) / 0.035);
+  border: 1px solid rgb(var(--panel-border) / 0.07);
+  scroll-snap-align: start;
+  max-height: 100%;
+}
+.kanban-column.is-over {
+  background-color: rgb(var(--ring-brand) / 0.08);
+  border-color: rgb(var(--ring-brand) / 0.35);
+}
+.kanban-card {
+  @apply glass-card p-3.5 cursor-grab active:cursor-grabbing;
+}
+.kanban-card:active {
+  transform: scale(0.98);
+}
+
+/* ── Table ─────────────────────────────────────────────────────────── */
+.data-table {
+  @apply w-full text-sm border-separate;
+  border-spacing: 0;
+}
+.data-table thead th {
+  @apply sticky top-0 z-10 text-left text-[11px] font-semibold uppercase tracking-wide px-4 py-2.5;
+  color: var(--ink-muted);
+  background-color: rgb(var(--surface) / 0.92);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid rgb(var(--panel-border) / 0.08);
+}
+.data-table tbody td {
+  @apply px-4 py-3 align-middle;
+  border-bottom: 1px solid rgb(var(--panel-border) / 0.055);
+}
+.data-table tbody tr {
+  @apply transition-colors duration-100 cursor-pointer;
+}
+.data-table tbody tr:hover td {
+  background-color: rgb(var(--ring-brand) / 0.045);
+}
+
+/* ── Skeleton shimmer ──────────────────────────────────────────────── */
+.skel {
+  @apply rounded-md;
+  background: linear-gradient(
+    90deg,
+    rgb(var(--panel-border) / 0.06) 25%,
+    rgb(var(--panel-border) / 0.12) 37%,
+    rgb(var(--panel-border) / 0.06) 63%
+  );
+  background-size: 400% 100%;
+  animation: shimmer 1.6s ease-in-out infinite;
+}
+
+/* ── Tooltips ──────────────────────────────────────────────────────── */
+.tip {
+  @apply pointer-events-none absolute z-50 rounded-lg px-2.5 py-1.5 text-xs font-medium shadow-glass-lg glass-strong whitespace-nowrap;
+  color: var(--ink-primary);
+}
+
+/* ── Divider ───────────────────────────────────────────────────────── */
+.hairline {
+  border-color: rgb(var(--panel-border) / 0.08);
+}

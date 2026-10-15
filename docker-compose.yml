@@ -1,0 +1,81 @@
+# Full stack: PostgreSQL + Spring Boot API + nginx-served SPA.
+#   cp .env.example .env   # then fill in DB_PASS, JWT_SECRET, APP_ENCRYPTION_KEY
+#   docker compose up -d --build
+# The app refuses to start without real secrets — there are no insecure fallbacks.
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: crm
+      POSTGRES_USER: crm
+      POSTGRES_PASSWORD: ${DB_PASS:?Set DB_PASS in .env}
+    # Not published to the host — only the api container talks to the database.
+    expose:
+      - "5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crm -d crm"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # "docker" = the azure profile's connection shape (same DB_* vars)
+      # minus sslmode=require, which this plain Postgres container doesn't serve.
+      SPRING_PROFILES_ACTIVE: docker
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: crm
+      DB_USER: crm
+      DB_PASS: ${DB_PASS:?Set DB_PASS in .env}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env (openssl rand -hex 32)}
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:?Set APP_ENCRYPTION_KEY in .env (openssl rand -hex 32)}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+      API_DOCS_ENABLED: ${API_DOCS_ENABLED:-true}
+      FCM_SERVER_KEY: ${FCM_SERVER_KEY:-}
+      WHATSAPP_GRAPH_URL: ${WHATSAPP_GRAPH_URL:-https://graph.facebook.com/v19.0}
+      WHATSAPP_APP_SECRET: ${WHATSAPP_APP_SECRET:-}
+      AZURE_STORAGE_CONNECTION_STRING: ${AZURE_STORAGE_CONNECTION_STRING:-}
+      AZURE_BLOB_CONTAINER: ${AZURE_BLOB_CONTAINER:-bettercrm-docs}
+      LOCAL_UPLOAD_DIR: /app/data/uploads
+    volumes:
+      # Persist local-disk attachments when Azure Blob isn't configured.
+      - api_uploads:/app/data/uploads
+    # Reached through the web container's /api proxy; publish 8080 only if
+    # another platform must call the Master API without going through nginx.
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/actuator/health/readiness || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 60s
+
+  web:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-8081}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  pg_data:
+  api_uploads:

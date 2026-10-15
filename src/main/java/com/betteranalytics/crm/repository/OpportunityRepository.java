@@ -1,0 +1,34 @@
+package com.betteranalytics.crm.repository;
+
+import com.betteranalytics.crm.entity.Opportunity;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import java.util.List;
+import java.util.Optional;
+
+public interface OpportunityRepository extends JpaRepository<Opportunity, Long> {
+    List<Opportunity> findByOrganizationId(Long organizationId);
+
+    Optional<Opportunity> findByIdAndOrganizationId(Long id, Long organizationId);
+
+    // NEW — soft-delete trash/restore support. These deliberately use
+    // nativeQuery=true: the entity's @SQLRestriction("deleted_at IS NULL")
+    // hides soft-deleted rows from every normal (JPQL/derived) query, so a
+    // native query is the one escape hatch for "actually let me see the
+    // deleted ones" — restore, and a trash-listing view.
+    @Query(value = "SELECT * FROM opportunities WHERE organization_id = :orgId AND deleted_at IS NOT NULL ORDER BY deleted_at DESC", nativeQuery = true)
+    List<Opportunity> findTrashedByOrganizationId(@Param("orgId") Long orgId);
+
+    @Query(value = "SELECT * FROM opportunities WHERE id = :id AND organization_id = :orgId", nativeQuery = true)
+    Optional<Opportunity> findByIdAndOrganizationIdIncludingDeleted(@Param("id") Long id, @Param("orgId") Long orgId);
+
+    /**
+     * Opportunities sourced from leads owned by a specific user.
+     * Used by OpportunityController to give Inside Sales read-only visibility
+     * into the stage of deals that came from their qualified leads (spec §5).
+     */
+    @Query("SELECT o FROM Opportunity o WHERE o.organizationId = :orgId AND o.sourcedByUserId = :userId")
+    List<Opportunity> findByOrganizationIdAndSourcedByUserId(
+            @Param("orgId") Long orgId, @Param("userId") Long userId);
+}
