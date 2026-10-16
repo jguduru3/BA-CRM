@@ -1,14 +1,15 @@
 import { RotateCcw } from "lucide-react";
 import { useCompaniesLookup, useUsersLookup } from "@/lib/hooks";
 import { Field, FieldGrid, SectionTitle } from "@/components/ui/Field";
-import type { OpportunityRecord } from "@/features/crm/types";
+import { CLOSED_STAGES } from "@/features/crm/types";
+import { categoryLabel, FORECAST_CATEGORIES, type DealRecord, type ForecastCategoryKey } from "./pipelineTypes";
 
 export const OPP_STAGES = ["Qualification", "Proposal", "Negotiation", "Verbal Commit", "Won", "Lost"];
 export const PROPOSAL_STATUSES = ["Not Sent", "Sent", "Viewed", "Revised"];
 export const NEGOTIATION_STATUSES = ["Not Started", "In Progress", "Final Offer", "Agreed"];
 export const PO_STATUSES = ["Not Requested", "Requested", "Received", "Payment Pending", "Paid"];
 
-export type OppDraft = Partial<OpportunityRecord>;
+export type OppDraft = Partial<DealRecord>;
 
 export function OpportunityForm({
   value,
@@ -16,6 +17,7 @@ export function OpportunityForm({
   canEditProbability,
   canEditPoStatus,
   stageDefault,
+  stageCategory,
   valueHidden,
 }: {
   value: OppDraft;
@@ -25,12 +27,16 @@ export function OpportunityForm({
   canEditPoStatus: boolean;
   /** The organisation's default probability for the selected stage. */
   stageDefault?: number;
+  /** The organisation's forecast category for the selected stage. */
+  stageCategory?: ForecastCategoryKey;
   /** The reader's role can't see deal value / probability (Inside Sales). */
   valueHidden?: boolean;
 }) {
+  const closed = CLOSED_STAGES.includes(value.stage ?? "");
+  const categoryOverridden = !!value.forecastCategoryOverridden && !closed;
   const users = useUsersLookup();
   const companies = useCompaniesLookup();
-  const set = <K extends keyof OpportunityRecord>(k: K, v: OpportunityRecord[K]) => onChange({ [k]: v } as OppDraft);
+  const set = <K extends keyof DealRecord>(k: K, v: DealRecord[K]) => onChange({ [k]: v } as OppDraft);
   const overridden = !!value.probabilityOverridden;
   const probabilityHint = valueHidden
     ? "Hidden for your role"
@@ -111,6 +117,37 @@ export function OpportunityForm({
             value={valueHidden ? "" : value.value ?? 0}
             onChange={(e) => set("value", Number(e.target.value))}
           />
+        </Field>
+        <Field
+          label="Forecast category"
+          hint={
+            closed
+              ? "Set by the closed stage"
+              : categoryOverridden
+              ? "Set by hand — stage changes keep it"
+              : `Automatic from the stage${stageCategory ? ` (${categoryLabel(stageCategory)})` : ""}`
+          }
+        >
+          <select
+            className="select"
+            disabled={closed}
+            aria-label="Forecast category"
+            value={categoryOverridden ? value.forecastCategory ?? "" : ""}
+            onChange={(e) =>
+              e.target.value
+                ? onChange({ forecastCategory: e.target.value as ForecastCategoryKey, forecastCategoryOverridden: true })
+                : onChange({ forecastCategoryOverridden: false, forecastCategory: stageCategory ?? value.forecastCategory })
+            }
+          >
+            <option value="">
+              Automatic{stageCategory ? ` — ${categoryLabel(closed ? value.forecastCategory : stageCategory)}` : ""}
+            </option>
+            {FORECAST_CATEGORIES.filter((c) => c.key !== "CLOSED_WON").map((c) => (
+              <option key={c.key} value={c.key}>
+                {c.label}
+              </option>
+            ))}
+          </select>
         </Field>
         <Field label="Expected close date">
           <input className="input" type="date" value={value.closeDate ?? ""} onChange={(e) => set("closeDate", e.target.value || null)} />

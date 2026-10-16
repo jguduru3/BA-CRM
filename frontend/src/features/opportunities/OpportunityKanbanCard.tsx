@@ -2,14 +2,15 @@ import { Building2, Calendar, Hourglass } from "lucide-react";
 import { formatCompactCurrency, formatDate } from "@/lib/format";
 import { Avatar } from "@/components/ui/Avatar";
 import { ageLabel } from "@/features/crm/ListParts";
-import type { OpportunityRecord } from "@/features/crm/types";
+import { HealthBadge } from "./HealthBadge";
+import type { DealRecord } from "./pipelineTypes";
 
 export function OpportunityKanbanCard({
   opp,
   companyName,
   ownerName,
 }: {
-  opp: OpportunityRecord;
+  opp: DealRecord;
   companyName?: string;
   ownerName?: string;
 }) {
@@ -29,15 +30,18 @@ export function OpportunityKanbanCard({
         <span className="text-sm font-bold tabular-nums" style={{ color: "var(--brand-600)" }}>
           {opp.value == null ? "—" : formatCompactCurrency(opp.value)}
         </span>
-        {probability != null && (
-          <span
-            className="text-[11px] font-bold px-1.5 py-0.5 rounded-full"
-            style={{ backgroundColor: "rgb(var(--panel-border) / 0.08)", color: "var(--ink-muted)" }}
-            title={opp.probabilityOverridden ? "Win probability set by hand" : "Win probability from stage"}
-          >
-            {probability}%{opp.probabilityOverridden ? " ✎" : ""}
-          </span>
-        )}
+        <span className="flex items-center gap-1">
+          {probability != null && (
+            <span
+              className="text-[11px] font-bold px-1.5 py-0.5 rounded-full"
+              style={{ backgroundColor: "rgb(var(--panel-border) / 0.08)", color: "var(--ink-muted)" }}
+              title={opp.probabilityOverridden ? "Win probability set by hand" : "Win probability from stage"}
+            >
+              {probability}%{opp.probabilityOverridden ? " ✎" : ""}
+            </span>
+          )}
+          <HealthBadge score={opp.healthScore} factors={opp.healthFactors} />
+        </span>
       </div>
       {probability != null && (
         <div className="mt-2 h-1 rounded-full overflow-hidden" style={{ backgroundColor: "rgb(var(--panel-border) / 0.08)" }}>
