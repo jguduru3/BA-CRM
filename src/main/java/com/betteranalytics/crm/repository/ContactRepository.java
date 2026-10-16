@@ -16,6 +16,9 @@ public interface ContactRepository extends JpaRepository<Contact, Long>, JpaSpec
 
     Optional<Contact> findByIdAndOrganizationId(Long id, Long organizationId);
 
+    /** Oldest live contact with this lowercase email (inbound email → record). */
+    Optional<Contact> findFirstByOrganizationIdAndEmailNormalizedOrderByIdAsc(Long organizationId, String emailNormalized);
+
     // NEW — soft-delete trash/restore support. These deliberately use
     // nativeQuery=true: the entity's @SQLRestriction("deleted_at IS NULL")
     // hides soft-deleted rows from every normal (JPQL/derived) query, so a

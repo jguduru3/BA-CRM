@@ -66,6 +66,23 @@ public class EmailAccount {
     @Column(name = "last_synced_at")
     private Instant lastSyncedAt;
 
+    // V81: scheduled inbox polling ("Watch inbox for replies"). The UID high-water
+    // mark is maintained by InboxPoller only (never written from request bodies).
+    @Column(name = "poll_inbox", nullable = false)
+    private boolean pollInbox = false;
+
+    @Column(name = "last_polled_uid")
+    private Long lastPolledUid;
+
+    @Column(name = "last_polled_uid_validity")
+    private Long lastPolledUidValidity;
+
+    @Column(name = "last_polled_at")
+    private Instant lastPolledAt;
+
+    @Column(name = "last_poll_error", length = 300)
+    private String lastPollError;
+
     @Column(name = "created_at", updatable = false)
     private Instant createdAt;
 

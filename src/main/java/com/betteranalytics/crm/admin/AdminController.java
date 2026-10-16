@@ -62,6 +62,8 @@ public class AdminController {
     private final String blobConnection;
     private final String appInsights;
     private final String whatsappSecret;
+    private final com.betteranalytics.crm.service.SmsSender smsSender;
+    private final com.betteranalytics.crm.repository.EmailAccountRepository emailAccountRepository;
 
     public AdminController(UserRepository userRepository, PermissionService permissionService,
                            CurrentUser currentUser, AuditService auditService, JdbcTemplate jdbc,
@@ -69,7 +71,11 @@ public class AdminController {
                            RateLimiter rateLimiter,
                            @Value("${azure.blob.connection-string:}") String blobConnection,
                            @Value("${app.applicationinsights.connection-string:}") String appInsights,
-                           @Value("${app.whatsapp.app-secret:}") String whatsappSecret) {
+                           @Value("${app.whatsapp.app-secret:}") String whatsappSecret,
+                           com.betteranalytics.crm.service.SmsSender smsSender,
+                           com.betteranalytics.crm.repository.EmailAccountRepository emailAccountRepository) {
+        this.smsSender = smsSender;
+        this.emailAccountRepository = emailAccountRepository;
         this.userRepository = userRepository;
         this.permissionService = permissionService;
         this.currentUser = currentUser;
@@ -280,7 +286,7 @@ public class AdminController {
 
     @GetMapping("/system")
     public Map<String, Object> system() {
-        requireAdmin(Action.VIEW);
+        User admin = requireAdmin(Action.VIEW);
         Map<String, Object> out = new LinkedHashMap<>();
         String version = getClass().getPackage().getImplementationVersion();
         out.put("version", version == null ? "1.0.0" : version);
@@ -305,6 +311,8 @@ public class AdminController {
         features.put("applicationInsights", !blank(appInsights));
         features.put("whatsappSignedWebhooks", !blank(whatsappSecret));
         features.put("apiDocs", env.getProperty("springdoc.api-docs.enabled", Boolean.class, true));
+        features.put("smsAzureCommunication", smsSender.isConfigured() ? "Configured (sender " + smsSender.fromNumber() + ")" : null);
+        features.put("emailInboxPolling", emailAccountRepository.countByOrganizationIdAndPollInboxTrueAndIsActiveTrue(admin.getOrganizationId()));
         out.put("features", features);
         return out;
     }

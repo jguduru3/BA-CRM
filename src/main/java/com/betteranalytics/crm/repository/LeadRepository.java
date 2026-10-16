@@ -19,6 +19,9 @@ public interface LeadRepository extends JpaRepository<Lead, Long>, JpaSpecificat
 
     Optional<Lead> findByIdAndOrganizationId(Long id, Long organizationId);
 
+    /** Oldest live lead with this lowercase email (inbound email → record). */
+    Optional<Lead> findFirstByOrganizationIdAndEmailNormalizedOrderByIdAsc(Long organizationId, String emailNormalized);
+
     @Query("""
         SELECT l FROM Lead l
         WHERE l.organizationId = :orgId

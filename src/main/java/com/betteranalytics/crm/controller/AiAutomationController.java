@@ -286,6 +286,9 @@ public class AiAutomationController {
             a.setImapPort(EmailIntegrationService.requireImapPort(body.getImapPort()));
         }
         a.setImapSsl(body.isImapSsl());
+        if (body.isPollInbox() && a.getImapHost() == null)
+            throw new IllegalArgumentException("Watching the inbox needs an IMAP host");
+        a.setPollInbox(body.isPollInbox());
         a.setActive(true);
         a.setCreatedAt(Instant.now());
         EmailAccount saved;
@@ -297,6 +300,34 @@ public class AiAutomationController {
         auditService.log("create", "email_accounts", saved.getId(), saved.getEmailAddress(), null,
                 Map.of("emailAddress", saved.getEmailAddress(), "smtpHost", saved.getSmtpHost()));
         return ResponseEntity.status(201).body(saved);
+    }
+
+    /** Partial update of mailbox settings that need no re-validation of credentials: {pollInbox}. */
+    @PatchMapping("/email-accounts/{accountId}")
+    public ResponseEntity<EmailAccount> updateEmailAccount(@PathVariable Long accountId,
+                                                           @RequestBody Map<String, Object> body) {
+        User actor = currentUser.get();
+        // Same roles that may connect a mailbox (EMAIL_ACCOUNT has no separate EDIT rule).
+        permissionService.require(actor, Action.CREATE, ResourceType.EMAIL_ACCOUNT, actor.getOrganizationId(), null);
+        EmailAccount existing = emailAccountRepo.findByIdAndOrganizationId(accountId, actor.getOrganizationId()).orElse(null);
+        if (existing == null) return ResponseEntity.notFound().build();
+        if (body.containsKey("pollInbox")) {
+            if (!(body.get("pollInbox") instanceof Boolean on)) throw new IllegalArgumentException("pollInbox must be true or false");
+            if (on && (existing.getImapHost() == null || existing.getImapHost().isBlank()))
+                throw new IllegalArgumentException("Watching the inbox needs an IMAP host on this mailbox");
+            boolean before = existing.isPollInbox();
+            existing.setPollInbox(on);
+            if (on && !before) {
+                // fresh baseline: only mail that arrives from now on is read
+                existing.setLastPolledUid(null);
+                existing.setLastPolledUidValidity(null);
+                existing.setLastPollError(null);
+            }
+            existing = emailAccountRepo.save(existing);
+            auditService.log("update", "email_accounts", existing.getId(), existing.getEmailAddress(),
+                    Map.of("pollInbox", before), Map.of("pollInbox", on));
+        }
+        return ResponseEntity.ok(existing);
     }
 
     @DeleteMapping("/email-accounts/{accountId}")
