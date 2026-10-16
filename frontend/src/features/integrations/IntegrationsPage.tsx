@@ -174,7 +174,7 @@ export default function IntegrationsPage() {
 
   if (role !== "SUPER_ADMIN") {
     return (
-      <div className="flex flex-col gap-6">
+      <div className="flex flex-col gap-4">
         <PageHeader title="Integrations" icon={<Plug size={20} />} />
         <div className="glass-card">
           <EmptyState
@@ -198,7 +198,7 @@ export default function IntegrationsPage() {
   const data = overview.data;
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4">
       <PageHeader
         title="Integrations"
         description="Connect other platforms through the Master API, API keys and signed webhooks."
@@ -221,7 +221,7 @@ export default function IntegrationsPage() {
       ) : (
         <>
           {/* Master API quick start */}
-          <section className="glass-card p-5 space-y-4">
+          <section className="glass-card p-4 space-y-4">
             <div className="flex items-center gap-2">
               <Activity size={16} style={{ color: "var(--brand-600)" }} />
               <h2 className="text-sm font-semibold" style={{ color: "var(--ink-primary)" }}>Master API</h2>
@@ -256,7 +256,7 @@ curl -X POST -H "X-API-Key: bcrm_…" -H "Content-Type: application/json" ${base
 
           {/* API keys */}
           <section className="glass-card overflow-hidden">
-            <div className="flex items-center justify-between px-5 py-4 hairline border-b">
+            <div className="flex items-center justify-between px-4 py-4 hairline border-b">
               <div className="flex items-center gap-2">
                 <KeyRound size={16} style={{ color: "var(--brand-600)" }} />
                 <h2 className="text-sm font-semibold" style={{ color: "var(--ink-primary)" }}>API keys</h2>
@@ -266,7 +266,7 @@ curl -X POST -H "X-API-Key: bcrm_…" -H "Content-Type: application/json" ${base
               </button>
             </div>
             {overview.isLoading ? (
-              <div className="p-5"><SkeletonRows rows={3} /></div>
+              <div className="p-4"><SkeletonRows rows={3} /></div>
             ) : !data?.apiKeys.length ? (
               <EmptyState icon={KeyRound} title="No API keys yet" description="Create a key to let another platform call the Master API." />
             ) : (
@@ -323,7 +323,7 @@ curl -X POST -H "X-API-Key: bcrm_…" -H "Content-Type: application/json" ${base
 
           {/* Webhooks */}
           <section className="glass-card overflow-hidden">
-            <div className="flex items-center justify-between px-5 py-4 hairline border-b">
+            <div className="flex items-center justify-between px-4 py-4 hairline border-b">
               <div className="flex items-center gap-2">
                 <Webhook size={16} style={{ color: "var(--brand-600)" }} />
                 <h2 className="text-sm font-semibold" style={{ color: "var(--ink-primary)" }}>Webhooks</h2>
@@ -333,13 +333,13 @@ curl -X POST -H "X-API-Key: bcrm_…" -H "Content-Type: application/json" ${base
               </button>
             </div>
             {overview.isLoading ? (
-              <div className="p-5"><SkeletonRows rows={2} /></div>
+              <div className="p-4"><SkeletonRows rows={2} /></div>
             ) : !data?.webhooks.length ? (
               <EmptyState icon={Webhook} title="No webhooks yet" description="Get an HMAC-signed POST whenever leads, deals, contacts and more change." />
             ) : (
               <ul className="divide-y" style={{ borderColor: "rgb(var(--panel-border) / 0.06)" }}>
                 {data.webhooks.map((h) => (
-                  <li key={h.id} className="px-5 py-4 flex flex-col lg:flex-row lg:items-center gap-3">
+                  <li key={h.id} className="px-4 py-4 flex flex-col lg:flex-row lg:items-center gap-3">
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-medium text-sm" style={{ color: "var(--ink-primary)" }}>{h.name}</span>
@@ -383,7 +383,7 @@ curl -X POST -H "X-API-Key: bcrm_…" -H "Content-Type: application/json" ${base
                 ))}
               </ul>
             )}
-            <div className="px-5 py-3 text-xs hairline border-t" style={{ color: "var(--ink-muted)" }}>
+            <div className="px-4 py-3 text-xs hairline border-t" style={{ color: "var(--ink-muted)" }}>
               Verify each delivery: <code className="font-mono">X-BetterCRM-Signature = sha256=HMAC_SHA256(secret, X-BetterCRM-Timestamp + "." + body)</code>.
               Failed deliveries retry after 10 s, 1 min and 5 min.
             </div>

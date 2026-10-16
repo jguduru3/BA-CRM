@@ -81,7 +81,7 @@ export default function ReportsPage() {
   ];
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4">
       <PageHeader title="Reports" description="Pipeline health, lead quality and team performance." icon={<BarChart3 size={20} />} />
 
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4">
@@ -107,7 +107,7 @@ export default function ReportsPage() {
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <div className="glass-card p-5">
+        <div className="glass-card p-4">
           <h3 className="text-sm font-semibold mb-4" style={{ color: "var(--ink-primary)" }}>
             Pipeline value by stage
           </h3>
@@ -127,7 +127,7 @@ export default function ReportsPage() {
             />
           )}
         </div>
-        <div className="glass-card p-5">
+        <div className="glass-card p-4">
           <h3 className="text-sm font-semibold mb-4" style={{ color: "var(--ink-primary)" }}>
             Lead conversion funnel
           </h3>
@@ -143,7 +143,7 @@ export default function ReportsPage() {
 
       <PipelineAnalytics />
 
-      <div className="glass-card p-5">
+      <div className="glass-card p-4">
         <h3 className="text-sm font-semibold mb-4" style={{ color: "var(--ink-primary)" }}>
           Lead sources breakdown
         </h3>

@@ -135,7 +135,7 @@ export default function TeamsAdminPage() {
   const totalMembers = teams.reduce((n, t) => n + t.memberCount, 0);
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-4">
       <PageHeader
         title="Teams"
         description={list.isSuccess ? `${teams.length} team${teams.length === 1 ? "" : "s"} · ${totalMembers} memberships` : "Groups that drive team-scoped visibility"}
@@ -173,7 +173,7 @@ export default function TeamsAdminPage() {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
           {teams.map((t) => (
-            <article key={t.id} className="glass-card p-4 sm:p-5 flex flex-col">
+            <article key={t.id} className="glass-card p-4 sm:p-4 flex flex-col">
               <div className="flex items-start justify-between gap-2">
                 <div className="flex items-center gap-2.5 min-w-0">
                   <span

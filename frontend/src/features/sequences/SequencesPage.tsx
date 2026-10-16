@@ -187,7 +187,7 @@ export default function SequencesPage() {
   ];
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-4">
       <PageHeader
         title="Sequences"
         description="Multi-channel follow-up — email, WhatsApp and tasks on a schedule, stopping as soon as someone replies."
@@ -227,7 +227,7 @@ export default function SequencesPage() {
           />
         </div>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-[18rem_minmax(0,1fr)] gap-5 items-start">
+        <div className="grid grid-cols-1 lg:grid-cols-[18rem_minmax(0,1fr)] gap-4 items-start">
           <ul className="space-y-2" aria-label="Sequences">
             {(list.data ?? []).map((s) => {
               const active = s.id === selectedId;
@@ -263,8 +263,8 @@ export default function SequencesPage() {
           </ul>
 
           {selected && (
-            <div className="flex flex-col gap-5 min-w-0">
-              <div className="glass-card p-5">
+            <div className="flex flex-col gap-4 min-w-0">
+              <div className="glass-card p-4">
                 <div className="flex flex-wrap items-start gap-3">
                   <div className="min-w-0 flex-1">
                     <h2 className="text-lg font-semibold" style={{ color: "var(--ink-primary)" }}>

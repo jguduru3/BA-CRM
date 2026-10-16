@@ -266,7 +266,7 @@ export default function OpportunitiesPage() {
   const boardTruncated = (board.data?.count ?? 0) > (board.data?.data.length ?? 0);
 
   return (
-    <div className="flex flex-col gap-5 flex-1 min-h-0">
+    <div className="flex flex-col gap-4 flex-1 min-h-0">
       <PageHeader
         title="Opportunities"
         description={
@@ -427,12 +427,12 @@ export default function OpportunitiesPage() {
           valueHidden={valueHidden}
         />
         {selected && (
-          <div className="mt-5 pt-4 hairline border-t space-y-5">
+          <div className="mt-5 pt-4 hairline border-t space-y-4">
             <RecordPagePanel relatedType="Opportunity" relatedId={selected.id} readOnly={readOnly} />
             <AttachmentList relatedType="Opportunity" relatedId={selected.id} />
           </div>
         )}
-        <div className="flex items-center justify-end gap-2 mt-6 pt-4 hairline border-t">
+        <div className="flex items-center justify-end gap-2 mt-4 pt-4 hairline border-t">
           <button className="btn-ghost" onClick={closeDrawers}>
             Cancel
           </button>

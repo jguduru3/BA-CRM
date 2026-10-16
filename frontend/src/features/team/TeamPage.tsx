@@ -210,7 +210,7 @@ export default function TeamPage() {
   }
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-4">
       <PageHeader
         title="Team"
         description={list.isSuccess ? `${activeCount} active · ${users.length - activeCount} deactivated` : "People in your organization"}
@@ -316,7 +316,7 @@ export default function TeamPage() {
         }
       >
         {selected && edit && (
-          <div className="space-y-6">
+          <div className="space-y-4">
             <div className="flex items-center gap-3">
               <Avatar name={edit.name || selected.name} color={edit.color} size={52} />
               <div className="min-w-0">
@@ -454,7 +454,7 @@ export default function TeamPage() {
       {/* Create drawer */}
       <Drawer open={creating} onClose={() => setCreating(false)} title="Add team member" subtitle="They'll pick their own password at first sign-in.">
         <form
-          className="space-y-5"
+          className="space-y-4"
           onSubmit={(e) => {
             e.preventDefault();
             if (createValid && !createUser.isPending) createUser.mutate();

@@ -73,7 +73,7 @@ export default function ForecastPage() {
   const valuesVisible = forecast.data?.valuesVisible ?? true;
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4">
       <PageHeader
         title="Forecast"
         description="Weighted pipeline by forecast category, against quota."
@@ -127,7 +127,7 @@ export default function ForecastPage() {
           <HeadlineTiles bucket={bucket} valuesVisible={valuesVisible} />
           <CategoryColumns bucket={bucket} valuesVisible={valuesVisible} />
           <div className="grid grid-cols-1 xl:grid-cols-5 gap-4">
-            <div className="glass-card p-5 xl:col-span-3">
+            <div className="glass-card p-4 xl:col-span-3">
               <h3 className="text-sm font-semibold mb-1" style={{ color: "var(--ink-primary)" }}>
                 Next {TREND_PERIODS} {period === "quarter" ? "quarters" : "months"} by category
               </h3>
@@ -136,13 +136,13 @@ export default function ForecastPage() {
               </p>
               <TrendChart buckets={forecast.data!.buckets} valuesVisible={valuesVisible} />
             </div>
-            <div className="glass-card p-5 xl:col-span-2">
+            <div className="glass-card p-4 xl:col-span-2">
               <QuotaPanel bucket={bucket} valuesVisible={valuesVisible} />
             </div>
           </div>
           {manager && (
             <div className="glass-card p-0 overflow-hidden">
-              <div className="flex flex-wrap items-center justify-between gap-3 px-5 pt-4 pb-3">
+              <div className="flex flex-wrap items-center justify-between gap-3 px-4 pt-4 pb-3">
                 <div>
                   <h3 className="text-sm font-semibold" style={{ color: "var(--ink-primary)" }}>
                     By {groupBy === "team" ? "team" : "owner"}
@@ -398,7 +398,7 @@ function GroupTable({
 
   if (groups.length === 0) {
     return (
-      <p className="text-sm px-5 pb-6 pt-2" style={{ color: "var(--ink-muted)" }}>
+      <p className="text-sm px-4 pb-4 pt-2" style={{ color: "var(--ink-muted)" }}>
         Nobody in your view has deals closing in this period yet.
       </p>
     );
@@ -409,20 +409,20 @@ function GroupTable({
       <table className="w-full text-sm min-w-[720px]">
         <thead>
           <tr className="hairline border-y text-xs uppercase tracking-wide" style={{ color: "var(--ink-muted)" }}>
-            <th className="text-left font-semibold px-5 py-2.5">Name</th>
+            <th className="text-left font-semibold px-4 py-2.5">Name</th>
             {(["PIPELINE", "BEST_CASE", "COMMIT", "CLOSED_WON"] as ForecastCategoryKey[]).map((k) => (
               <th key={k} className="text-right font-semibold px-3 py-2.5">
                 {label(k)}
               </th>
             ))}
             <th className="text-right font-semibold px-3 py-2.5">Commit + won</th>
-            <th className="text-left font-semibold px-5 py-2.5 w-[220px]">Quota</th>
+            <th className="text-left font-semibold px-4 py-2.5 w-[220px]">Quota</th>
           </tr>
         </thead>
         <tbody>
           {groups.map((g) => (
             <tr key={`${g.id ?? "none"}-${g.name}`} className="hairline border-b last:border-b-0">
-              <td className="px-5 py-3">
+              <td className="px-4 py-3">
                 <div className="flex items-center gap-2.5 min-w-0">
                   <Avatar name={g.name} color={g.color ?? undefined} size={26} />
                   <span className="font-medium truncate" style={{ color: "var(--ink-primary)" }}>
@@ -438,7 +438,7 @@ function GroupTable({
               <td className="text-right tabular-nums font-semibold px-3 py-3" style={{ color: "var(--ink-primary)" }}>
                 {valuesVisible ? money(g.commitAndWon) : g.totals.COMMIT.count + g.totals.CLOSED_WON.count}
               </td>
-              <td className="px-5 py-3">
+              <td className="px-4 py-3">
                 {editableQuota && g.id != null && editing === g.id ? (
                   <form
                     className="flex items-center gap-1.5"

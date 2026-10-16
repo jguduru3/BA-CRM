@@ -146,7 +146,7 @@ export default function NotesPage() {
   );
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-4">
       <PageHeader
         title="Notes"
         description={`${list.data?.count ?? 0} notes`}
@@ -184,7 +184,7 @@ export default function NotesPage() {
           />
         </div>
       ) : (
-        <div className="space-y-6">
+        <div className="space-y-4">
           {pinned.length > 0 && (
             <section>
               <h2 className="field-label">Pinned</h2>

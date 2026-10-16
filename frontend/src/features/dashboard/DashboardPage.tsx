@@ -41,7 +41,7 @@ export default function DashboardPage() {
     stats.data?.scope === "org" ? "Organization-wide" : stats.data?.scope === "team" ? "Your team" : "Your records";
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4">
       <PageHeader
         title={`Welcome back, ${user?.name?.split(" ")[0] ?? ""}`}
         description={`${scopeLabel} · ${roleLabel(user?.role)}`}
@@ -98,7 +98,7 @@ export default function DashboardPage() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
-        <div className="glass-card p-5 lg:col-span-3">
+        <div className="glass-card p-4 lg:col-span-3">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-sm font-semibold" style={{ color: "var(--ink-primary)" }}>
               Opportunity pipeline by stage
@@ -127,7 +127,7 @@ export default function DashboardPage() {
           )}
         </div>
 
-        <div className="glass-card p-5 lg:col-span-2">
+        <div className="glass-card p-4 lg:col-span-2">
           <h3 className="text-sm font-semibold mb-4" style={{ color: "var(--ink-primary)" }}>
             Lead sources
           </h3>
@@ -146,7 +146,7 @@ export default function DashboardPage() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
-        <div className="glass-card p-5 lg:col-span-2">
+        <div className="glass-card p-4 lg:col-span-2">
           <h3 className="text-sm font-semibold mb-4" style={{ color: "var(--ink-primary)" }}>
             Lead funnel
           </h3>
@@ -159,7 +159,7 @@ export default function DashboardPage() {
           )}
         </div>
 
-        <div className="glass-card p-5 lg:col-span-3">
+        <div className="glass-card p-4 lg:col-span-3">
           <h3 className="text-sm font-semibold mb-4" style={{ color: "var(--ink-primary)" }}>
             Team leaderboard
           </h3>

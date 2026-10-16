@@ -56,7 +56,7 @@ const pct = (v: number | null | undefined) => (v == null ? "—" : `${v}%`);
 
 function Card({ title, sub, children, className = "" }: { title: string; sub?: string; children: React.ReactNode; className?: string }) {
   return (
-    <div className={`glass-card p-5 min-w-0 ${className}`}>
+    <div className={`glass-card p-4 min-w-0 ${className}`}>
       <h3 className="text-sm font-semibold" style={{ color: "var(--ink-primary)" }}>
         {title}
       </h3>

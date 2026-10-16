@@ -128,7 +128,7 @@ export default function ProjectsPage() {
   });
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-4">
       <PageHeader
         title="Projects"
         description={`${list.data?.length ?? 0} ${(list.data?.length ?? 0) === 1 ? "project" : "projects"} · track milestones, people and files`}

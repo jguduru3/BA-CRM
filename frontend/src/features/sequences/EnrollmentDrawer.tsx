@@ -95,7 +95,7 @@ export function EnrollmentDrawer({ enrollmentId, onClose }: { enrollmentId: numb
       ) : !e ? (
         <SkeletonRows rows={5} cols={2} />
       ) : (
-        <div className="space-y-6">
+        <div className="space-y-4">
           <div className="flex flex-wrap items-center gap-2">
             <span className={STATUS_TONE[e.status]}>{STATUS_LABEL[e.status]}</span>
             <span className="text-xs tabular-nums" style={{ color: "var(--ink-muted)" }}>

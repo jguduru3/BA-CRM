@@ -67,7 +67,7 @@ export default function WhiteboardsPage() {
   });
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-4">
       <PageHeader
         title="Whiteboards"
         description="A freeform canvas for planning and brainstorming — sticky notes, text, shapes and images."

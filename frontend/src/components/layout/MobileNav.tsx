@@ -54,7 +54,7 @@ export function MobileNavDrawer() {
             <X size={18} />
           </button>
         </div>
-        <nav className="flex-1 overflow-y-auto thin-scroll py-3 px-3 space-y-5" aria-label="Main">
+        <nav className="flex-1 overflow-y-auto thin-scroll py-3 px-3 space-y-4" aria-label="Main">
           {NAV_GROUPS.map((group) => {
             const items = group.items.filter((i) => canSee(i, role));
             if (items.length === 0) return null;

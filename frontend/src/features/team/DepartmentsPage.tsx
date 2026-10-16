@@ -182,7 +182,7 @@ export default function DepartmentsPage() {
   const activeCount = rows.filter((r) => r.active !== false).length;
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-4">
       <PageHeader
         title="Departments"
         description={

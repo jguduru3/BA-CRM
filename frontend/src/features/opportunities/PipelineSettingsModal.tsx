@@ -76,7 +76,7 @@ export function PipelineSettingsModal({ open, onClose }: { open: boolean; onClos
       {settings.isError ? (
         <QueryError error={settings.error} onRetry={() => settings.refetch()} compact />
       ) : (
-        <div className="space-y-5">
+        <div className="space-y-4">
           <div>
             <p className="field-label">Default win probability by stage</p>
             <p className="text-xs mb-3" style={{ color: "var(--ink-muted)" }}>

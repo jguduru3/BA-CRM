@@ -92,7 +92,7 @@ export function SequenceBuilder({
     setDraft((d) => ({ ...d, steps: [...d.steps, { ...blankStep(channel), delayDays: d.steps.length ? 2 : 0 }] }));
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <div className="space-y-4">
         <Field label="Name" required>
           <input

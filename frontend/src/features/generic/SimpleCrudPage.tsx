@@ -98,7 +98,7 @@ export function SimpleCrudPage<T extends { id: number }>({
   const set = (key: string, v: unknown) => setDraft((d) => ({ ...d, [key]: v }));
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-4">
       <PageHeader
         title={label}
         description={description ?? `${list.data?.count ?? 0} records`}
@@ -194,8 +194,8 @@ export function SimpleCrudPage<T extends { id: number }>({
             </Field>
           ))}
         </fieldset>
-        {selected && renderDetail && <div className="mt-6">{renderDetail(selected)}</div>}
-        <div className="flex items-center justify-end gap-2 mt-6 pt-4 hairline border-t">
+        {selected && renderDetail && <div className="mt-4">{renderDetail(selected)}</div>}
+        <div className="flex items-center justify-end gap-2 mt-4 pt-4 hairline border-t">
           <button className="btn-ghost" onClick={closeDrawers}>
             {writable ? "Cancel" : "Close"}
           </button>

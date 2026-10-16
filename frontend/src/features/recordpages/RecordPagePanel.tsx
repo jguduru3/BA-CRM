@@ -195,7 +195,7 @@ export function RecordPagePanel({
   return (
     <div className="flex flex-col gap-0.5" data-testid="record-page">
       {blocks.length === 0 && (
-        <p className="text-sm py-6 text-center rounded-xl" style={{ color: "var(--ink-muted)", backgroundColor: "rgb(var(--panel-border) / 0.03)" }}>
+        <p className="text-sm py-4 text-center rounded-xl" style={{ color: "var(--ink-muted)", backgroundColor: "rgb(var(--panel-border) / 0.03)" }}>
           {editable ? "This page is empty — add a heading or start writing below." : "Nothing written here yet."}
         </p>
       )}

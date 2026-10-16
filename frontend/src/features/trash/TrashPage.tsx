@@ -43,7 +43,7 @@ export default function TrashPage() {
   });
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-4">
       <PageHeader title="Trash" description="Soft-deleted records, recoverable at any time." icon={<Trash2 size={20} />} />
 
       <Tabs value={resource} onChange={setResource} tabs={RESOURCES.map((r) => ({ value: r.value, label: r.label }))} />

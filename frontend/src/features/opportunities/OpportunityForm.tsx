@@ -45,7 +45,7 @@ export function OpportunityForm({
     : `Automatic from the stage${stageDefault != null ? ` (${stageDefault}%)` : ""}`;
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <FieldGrid>
         <Field label="Deal name" required className="sm:col-span-2">
           <input className="input" value={value.name ?? ""} onChange={(e) => set("name", e.target.value)} placeholder="Acme — Platform rollout" />

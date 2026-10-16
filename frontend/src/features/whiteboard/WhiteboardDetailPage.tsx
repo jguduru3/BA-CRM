@@ -233,7 +233,7 @@ export default function WhiteboardDetailPage() {
 
   return (
     <div className="flex flex-col gap-3 flex-1 min-h-0 -m-4 sm:-m-6 lg:-m-8">
-      <div className="flex flex-wrap items-center justify-between gap-3 px-4 sm:px-6 lg:px-8 pt-4 sm:pt-6 lg:pt-8">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-4 sm:px-6 lg:px-8 pt-4 sm:pt-4 lg:pt-8">
         <div className="flex items-center gap-3 min-w-0">
           <Link to="/whiteboards" className="btn-icon shrink-0" aria-label="Back to whiteboards">
             <ArrowLeft size={17} />
@@ -308,7 +308,7 @@ export default function WhiteboardDetailPage() {
 
       <div
         ref={containerRef}
-        className="flex-1 overflow-auto thin-scroll relative mx-4 sm:mx-6 lg:mx-8 mb-4 sm:mb-6 lg:mb-8 rounded-2xl min-h-[60vh]"
+        className="flex-1 overflow-auto thin-scroll relative mx-4 sm:mx-6 lg:mx-8 mb-4 sm:mb-4 lg:mb-8 rounded-2xl min-h-[60vh]"
         style={{
           backgroundColor: "var(--surface-sunken)",
           backgroundImage: "radial-gradient(rgb(var(--panel-border) / 0.18) 1px, transparent 1px)",

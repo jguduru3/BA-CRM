@@ -159,7 +159,7 @@ export default function AdminConsolePage() {
   if (role !== "SUPER_ADMIN") return <Navigate to="/" replace />;
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4">
       <PageHeader
         title="Admin console"
         description="Users, security, configuration and system health for your organization."
@@ -196,7 +196,7 @@ export default function AdminConsolePage() {
 function OverviewTab({ onOpen }: { onOpen: (t: TabKey) => void }) {
   const q = useQuery({ queryKey: ["admin", "overview"], queryFn: async () => (await api.get<Overview>("/admin/overview")).data });
   if (q.isError) return <div className="glass-card"><QueryError error={q.error} onRetry={() => q.refetch()} /></div>;
-  if (q.isLoading || !q.data) return <div className="glass-card p-5"><SkeletonRows rows={6} /></div>;
+  if (q.isLoading || !q.data) return <div className="glass-card p-4"><SkeletonRows rows={6} /></div>;
   const o = q.data;
   const sec = o.securityLast7Days;
   // Always seven day-slots (oldest → today), so a single busy day doesn't fill the chart.
@@ -215,7 +215,7 @@ function OverviewTab({ onOpen }: { onOpen: (t: TabKey) => void }) {
   if (!o.integrations.aiConfigured) attention.push({ icon: Bot, text: "AI assistant is not configured", tab: "configuration", tone: "warning" });
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4">
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         <StatTile label="Active users" value={o.users.active} icon={Users} sub={`${o.users.total} total · ${o.users.activeLast7Days} active this week`} />
         <StatTile label="Locked accounts" value={o.users.lockedNow} icon={Lock} tone={o.users.lockedNow ? "critical" : "good"} sub={`${o.users.pendingPasswordChange} must set a new password`} />
@@ -224,7 +224,7 @@ function OverviewTab({ onOpen }: { onOpen: (t: TabKey) => void }) {
       </div>
 
       {attention.length > 0 && (
-        <section className="glass-card p-5">
+        <section className="glass-card p-4">
           <h2 className="text-sm font-semibold mb-3" style={{ color: "var(--ink-primary)" }}>Needs attention</h2>
           <ul className="space-y-2">
             {attention.map((a) => (
@@ -245,7 +245,7 @@ function OverviewTab({ onOpen }: { onOpen: (t: TabKey) => void }) {
       )}
 
       <div className="grid lg:grid-cols-3 gap-4">
-        <section className="glass-card p-5 lg:col-span-2">
+        <section className="glass-card p-4 lg:col-span-2">
           <h2 className="text-sm font-semibold" style={{ color: "var(--ink-primary)" }}>Activity, last 7 days</h2>
           <p className="text-xs mb-4" style={{ color: "var(--ink-muted)" }}>Audited changes, sign-ins and exports per day</p>
           <div className="flex items-end gap-2 sm:gap-3 h-40" role="img" aria-label="Audit events per day for the last 7 days">
@@ -265,7 +265,7 @@ function OverviewTab({ onOpen }: { onOpen: (t: TabKey) => void }) {
             ))}
           </div>
         </section>
-        <section className="glass-card p-5">
+        <section className="glass-card p-4">
           <h2 className="text-sm font-semibold mb-3" style={{ color: "var(--ink-primary)" }}>Users by role</h2>
           <ul className="space-y-2">
             {Object.entries(o.users.byRole).map(([r, n]) => (
@@ -293,7 +293,7 @@ function OverviewTab({ onOpen }: { onOpen: (t: TabKey) => void }) {
 
 function MiniCard({ icon: Icon, title, lines }: { icon: LucideIcon; title: string; lines: string[] }) {
   return (
-    <section className="glass-card p-5">
+    <section className="glass-card p-4">
       <div className="flex items-center gap-2 mb-3">
         <span className="h-8 w-8 rounded-lg flex items-center justify-center" style={{ backgroundColor: "rgb(var(--ring-brand) / 0.12)", color: "var(--brand-600)" }}>
           <Icon size={15} />
@@ -364,7 +364,7 @@ function UsersTab() {
 
   return (
     <section className="glass-card overflow-hidden">
-      <div className="flex flex-col lg:flex-row lg:items-center gap-3 px-5 py-4 hairline border-b">
+      <div className="flex flex-col lg:flex-row lg:items-center gap-3 px-4 py-4 hairline border-b">
         <div className="flex flex-wrap gap-1.5">
           {(["all", "active", "locked", "pending", "deactivated"] as UserFilter[]).map((f) => (
             <button
@@ -395,7 +395,7 @@ function UsersTab() {
       {q.isError ? (
         <QueryError error={q.error} onRetry={() => q.refetch()} />
       ) : q.isLoading ? (
-        <div className="p-5"><SkeletonRows rows={6} /></div>
+        <div className="p-4"><SkeletonRows rows={6} /></div>
       ) : rows.length === 0 ? (
         <EmptyState icon={Users} title="No users match" description="Try another filter or search term." />
       ) : (
@@ -654,7 +654,7 @@ function SecurityTab() {
   });
   return (
     <section className="glass-card overflow-hidden">
-      <div className="flex flex-col sm:flex-row sm:items-center gap-3 px-5 py-4 hairline border-b">
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3 px-4 py-4 hairline border-b">
         <select className="select sm:w-56" value={action} onChange={(e) => setAction(e.target.value)} aria-label="Event type">
           <option value="">All security events</option>
           {Object.entries(EVENT_META).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
@@ -672,7 +672,7 @@ function SecurityTab() {
       {q.isError ? (
         <QueryError error={q.error} onRetry={() => q.refetch()} />
       ) : q.isLoading ? (
-        <div className="p-5"><SkeletonRows rows={8} /></div>
+        <div className="p-4"><SkeletonRows rows={8} /></div>
       ) : !q.data?.data.length ? (
         <EmptyState icon={ShieldCheck} title="No security events" description="Nothing matched this period and filter." />
       ) : (
@@ -744,7 +744,7 @@ const CONFIG: { group: string; items: { icon: LucideIcon; title: string; desc: s
 
 function ConfigurationTab() {
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4">
       {CONFIG.map((g) => (
         <section key={g.group}>
           <h2 className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: "var(--ink-muted)" }}>{g.group}</h2>
@@ -782,7 +782,7 @@ const FEATURE_LABELS: Record<string, string> = {
 function SystemTab() {
   const q = useQuery({ queryKey: ["admin", "system"], queryFn: async () => (await api.get<SystemInfo>("/admin/system")).data });
   if (q.isError) return <div className="glass-card"><QueryError error={q.error} onRetry={() => q.refetch()} /></div>;
-  if (q.isLoading || !q.data) return <div className="glass-card p-5"><SkeletonRows rows={6} /></div>;
+  if (q.isLoading || !q.data) return <div className="glass-card p-4"><SkeletonRows rows={6} /></div>;
   const s = q.data;
   const rows: [string, React.ReactNode][] = [
     ["Version", s.version],
@@ -795,7 +795,7 @@ function SystemTab() {
   ];
   return (
     <div className="grid lg:grid-cols-2 gap-4">
-      <section className="glass-card p-5">
+      <section className="glass-card p-4">
         <div className="flex items-center gap-2 mb-4">
           <Cpu size={16} style={{ color: "var(--brand-600)" }} />
           <h2 className="text-sm font-semibold" style={{ color: "var(--ink-primary)" }}>Runtime</h2>
@@ -809,7 +809,7 @@ function SystemTab() {
           ))}
         </dl>
       </section>
-      <section className="glass-card p-5">
+      <section className="glass-card p-4">
         <div className="flex items-center gap-2 mb-4">
           <Settings2 size={16} style={{ color: "var(--brand-600)" }} />
           <h2 className="text-sm font-semibold" style={{ color: "var(--ink-primary)" }}>Integrations & services</h2>

@@ -44,7 +44,7 @@ export default function WhatsAppPage() {
   const startNew = typed && !threads.some((t) => t.phone === typed) ? typed : null;
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-4">
       <PageHeader
         title="WhatsApp"
         description="Conversations, delivery receipts and consent across your WhatsApp Business numbers."

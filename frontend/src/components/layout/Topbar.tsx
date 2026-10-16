@@ -24,15 +24,15 @@ export function Topbar() {
 
   return (
     <header
-      className="shrink-0 flex items-center justify-between gap-2 sm:gap-3 px-3 sm:px-6 glass border-x-0 border-t-0 border-b hairline relative z-30"
-      style={{ height: "calc(4rem + env(safe-area-inset-top, 0px))", paddingTop: "env(safe-area-inset-top, 0px)" }}
+      className="shrink-0 flex items-center justify-between gap-2 sm:gap-3 px-3.5 sm:px-4 lg:px-6 relative z-30"
+      style={{ height: "calc(3.5rem + env(safe-area-inset-top, 0px))", paddingTop: "env(safe-area-inset-top, 0px)" }}
     >
       <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
         <MobileNavButton />
         <Logo height={24} className="lg:hidden block shrink-0" />
         <button
           onClick={() => setPaletteOpen(true)}
-          className="group flex items-center justify-center sm:justify-start gap-2.5 h-10 w-10 sm:w-full max-w-md rounded-xl sm:px-3.5 text-sm transition-all glass-solid hover:border-[rgb(var(--ring-brand)/0.35)] focus-brand ml-auto sm:ml-0"
+          className="group flex items-center justify-center sm:justify-start gap-2.5 h-9 w-9 sm:w-full max-w-sm rounded-[11px] sm:px-3 text-[13px] transition-all glass hover:border-[rgb(var(--ring-brand)/0.35)] focus-brand ml-auto sm:ml-0"
           style={{ color: "var(--ink-muted)" }}
           aria-label="Search"
         >

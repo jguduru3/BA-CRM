@@ -33,17 +33,17 @@ export function Modal({
   return createPortal(
     <div className="fixed inset-0 z-[70] flex items-start sm:items-center justify-center p-4 overflow-y-auto">
       <div
-        className="fixed inset-0 bg-slate-950/40 backdrop-blur-sm animate-fade-in"
+        className="fixed inset-0 bg-slate-950/25 backdrop-blur-[3px] animate-fade-in"
         onClick={onClose}
         aria-hidden
       />
       <div
         role="dialog"
         aria-modal="true"
-        className="relative w-full glass-strong glass-reveal rounded-2xl shadow-glass-lg animate-slide-up my-8"
+        className="relative w-full glass-strong glass-reveal rounded-[22px] animate-slide-up my-8"
         style={{ maxWidth: width }}
       >
-        <div className="flex items-center justify-between px-5 py-4 hairline border-b">
+        <div className="flex items-center justify-between px-4 py-3 hairline border-b">
           <h2 className="text-[15px] font-semibold" style={{ color: "var(--ink-primary)" }}>
             {title}
           </h2>
@@ -51,8 +51,8 @@ export function Modal({
             <X size={17} />
           </button>
         </div>
-        <div className="px-5 py-5 max-h-[70vh] overflow-y-auto thin-scroll">{children}</div>
-        {footer && <div className="flex items-center justify-end gap-2 px-5 py-4 hairline border-t">{footer}</div>}
+        <div className="px-4 py-4 max-h-[72vh] overflow-y-auto thin-scroll">{children}</div>
+        {footer && <div className="flex items-center justify-end gap-2 px-4 py-3 hairline border-t">{footer}</div>}
       </div>
     </div>,
     document.body

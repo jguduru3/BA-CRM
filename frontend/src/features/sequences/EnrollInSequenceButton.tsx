@@ -85,7 +85,7 @@ export function EnrollInSequenceButton({
           </>
         }
       >
-        <div className="space-y-5">
+        <div className="space-y-4">
           <section>
             <h3 className="field-label">Current enrollments</h3>
             {enrollments.isError ? (

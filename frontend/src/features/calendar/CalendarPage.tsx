@@ -149,7 +149,7 @@ export default function CalendarPage() {
   const editable = creating || canEdit(editing);
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-4">
       <PageHeader
         title="Calendar"
         description="Your events, deadlines and meetings."
@@ -263,7 +263,7 @@ export default function CalendarPage() {
       ) : (
         <div className="space-y-4">
           {agenda.map(({ day, items }) => (
-            <div key={day.toISOString()} className="glass-card p-4 flex flex-col sm:flex-row gap-3 sm:gap-6">
+            <div key={day.toISOString()} className="glass-card p-4 flex flex-col sm:flex-row gap-3 sm:gap-4">
               <div className="sm:w-28 shrink-0">
                 <p className="text-2xl font-bold leading-none" style={{ color: isToday(day) ? "var(--brand-600)" : "var(--ink-primary)" }}>
                   {format(day, "d")}

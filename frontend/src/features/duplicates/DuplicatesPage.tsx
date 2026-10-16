@@ -53,7 +53,7 @@ export default function DuplicatesPage() {
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-4">
       <PageHeader
         title="Duplicates"
         description={
@@ -181,7 +181,7 @@ export function GroupCard({ type, group, canMerge }: { type: DuplicateType; grou
   }
 
   return (
-    <section className="glass-card p-4 sm:p-5" aria-label={`Duplicate group ${group.key}`}>
+    <section className="glass-card p-4 sm:p-4" aria-label={`Duplicate group ${group.key}`}>
       <header className="flex flex-wrap items-center gap-2 mb-4">
         <span className="badge-brand">{scorePercent(group.score)} match</span>
         {group.matchedOn.map((m) => (

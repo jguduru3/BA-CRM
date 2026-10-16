@@ -201,7 +201,7 @@ export default function ContactsPage() {
   const filtered = !!(table.search || categoryFilter || industryFilter || countryFilter);
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-4">
       <PageHeader
         title="Contacts"
         description={table.query.data ? `${table.total.toLocaleString()} people${filtered ? " match" : ""}` : "The people you work with"}
@@ -313,13 +313,13 @@ export default function ContactsPage() {
       >
         <ContactForm value={draft} onChange={(p) => setDraft((d) => ({ ...d, ...p }))} />
         {selected && (
-          <div className="mt-5 pt-4 hairline border-t space-y-5">
+          <div className="mt-5 pt-4 hairline border-t space-y-4">
             <EnrollInSequenceButton relatedType="Contact" relatedId={selected.id} />
             <RecordPagePanel relatedType="Contact" relatedId={selected.id} readOnly={readOnly} />
             <AttachmentList relatedType="Contact" relatedId={selected.id} />
           </div>
         )}
-        <div className="flex items-center justify-end gap-2 mt-6 pt-4 hairline border-t">
+        <div className="flex items-center justify-end gap-2 mt-4 pt-4 hairline border-t">
           <button className="btn-ghost" onClick={closeDrawers}>
             Cancel
           </button>

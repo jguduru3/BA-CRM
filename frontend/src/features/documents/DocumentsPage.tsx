@@ -107,7 +107,7 @@ export default function DocumentsPage() {
   }, [title, titleDirty]);
 
   return (
-    <div className="flex flex-col gap-5 flex-1 min-h-0">
+    <div className="flex flex-col gap-4 flex-1 min-h-0">
       <PageHeader
         title="Documents"
         description="Block pages — headings, notes, to-dos and files, linked to any record."
@@ -175,7 +175,7 @@ export default function DocumentsPage() {
             </div>
           </aside>
 
-          <section className="lg:col-span-3 glass-card p-5 sm:p-8 flex flex-col min-h-[60vh]">
+          <section className="lg:col-span-3 glass-card p-4 sm:p-8 flex flex-col min-h-[60vh]">
             {!selected ? (
               list.isLoading ? (
                 <div className="space-y-3">
@@ -218,12 +218,12 @@ export default function DocumentsPage() {
                     </button>
                   )}
                 </div>
-                <p className="text-[11px] mb-6" style={{ color: "var(--ink-muted)" }}>
+                <p className="text-[11px] mb-4" style={{ color: "var(--ink-muted)" }}>
                   {saveTitle.isPending ? "Saving…" : titleDirty ? "Unsaved changes…" : `Last edited ${formatRelative(selected.updatedAt)}`}
                 </p>
 
                 {selected.contentJson && selected.contentJson.trim() && (
-                  <div className="mb-6 rounded-xl p-4" style={{ backgroundColor: "rgb(var(--panel-border) / 0.035)" }}>
+                  <div className="mb-4 rounded-xl p-4" style={{ backgroundColor: "rgb(var(--panel-border) / 0.035)" }}>
                     <div className="flex items-center justify-between gap-2 mb-2">
                       <p className="field-label mb-0">Earlier notes</p>
                       {!readOnly && (

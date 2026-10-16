@@ -181,7 +181,7 @@ export default function TasksPage() {
   const openCount = (board.data?.data ?? []).filter((t) => t.status !== "Done").length;
 
   return (
-    <div className="flex flex-col gap-5 flex-1 min-h-0">
+    <div className="flex flex-col gap-4 flex-1 min-h-0">
       <PageHeader
         title="Tasks"
         description={
@@ -303,7 +303,7 @@ export default function TasksPage() {
         }
       >
         <TaskForm value={draft} onChange={(p) => setDraft((d) => ({ ...d, ...p }))} />
-        <div className="flex items-center justify-end gap-2 mt-6 pt-4 hairline border-t">
+        <div className="flex items-center justify-end gap-2 mt-4 pt-4 hairline border-t">
           <button className="btn-ghost" onClick={closeDrawers}>
             Cancel
           </button>

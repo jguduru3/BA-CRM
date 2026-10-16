@@ -89,7 +89,7 @@ export function LeadRoutingSettings({ open, onClose }: { open: boolean; onClose:
           <Skeleton className="h-24" />
         </div>
       ) : (
-        <div className="space-y-5">
+        <div className="space-y-4">
           <div className="flex gap-3">
             <div
               className="flex items-center justify-center h-10 w-10 rounded-xl shrink-0"

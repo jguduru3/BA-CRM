@@ -60,7 +60,7 @@ export default function DatabasesPage() {
   });
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-4">
       <PageHeader
         title="Databases"
         description="Notion-style tables and boards with typed properties, built on your own schema."

@@ -222,7 +222,7 @@ export default function DatabaseDetailPage() {
   const previewProps = properties.filter((p) => p.id !== boardProp?.id).slice(0, 3);
 
   return (
-    <div className="flex flex-col gap-5 flex-1 min-h-0">
+    <div className="flex flex-col gap-4 flex-1 min-h-0">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-3 min-w-0">
           <Link to="/databases" className="btn-icon shrink-0" aria-label="Back to databases">
@@ -411,7 +411,7 @@ export default function DatabaseDetailPage() {
             </Field>
           ))}
         </div>
-        <div className="flex items-center justify-end gap-2 mt-6 pt-4 hairline border-t">
+        <div className="flex items-center justify-end gap-2 mt-4 pt-4 hairline border-t">
           <button className="btn-ghost" onClick={closeDrawers}>
             {canEdit ? "Cancel" : "Close"}
           </button>
@@ -427,7 +427,7 @@ export default function DatabaseDetailPage() {
               <p className="field-label">Page</p>
               <RecordPagePanel relatedType="DatabaseRecord" relatedId={recordDrawer.record.id} readOnly={!canEdit} />
             </div>
-            <div className="mt-6 pt-4 hairline border-t">
+            <div className="mt-4 pt-4 hairline border-t">
               <AttachmentList relatedType="DatabaseRecord" relatedId={recordDrawer.record.id} readOnly={!canEdit} />
             </div>
           </>

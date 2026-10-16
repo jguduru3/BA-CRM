@@ -218,13 +218,13 @@ export function LeadDrawer({
         {lead && <AiAssistPanel lead={lead} />}
         <LeadForm value={draft} onChange={(p) => setDraft((d) => ({ ...d, ...p }))} disableSourceEdit={disableSourceEdit} />
         {lead && (
-          <div className="mt-5 pt-4 hairline border-t space-y-5">
+          <div className="mt-5 pt-4 hairline border-t space-y-4">
             <EnrollInSequenceButton relatedType="Lead" relatedId={lead.id} />
             <RecordPagePanel relatedType="Lead" relatedId={lead.id} readOnly={readOnly} />
             <AttachmentList relatedType="Lead" relatedId={lead.id} />
           </div>
         )}
-        <div className="flex items-center justify-end gap-2 mt-6 pt-4 hairline border-t">
+        <div className="flex items-center justify-end gap-2 mt-4 pt-4 hairline border-t">
           <button className="btn-ghost" onClick={onClose}>
             Cancel
           </button>

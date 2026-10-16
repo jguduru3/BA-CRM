@@ -30,22 +30,22 @@ export function StatTile({
   const isGood = trend ? (trend.positiveIsGood ?? true ? trend.value >= 0 : trend.value < 0) : null;
 
   return (
-    <div className="glass-card-hover p-3.5 sm:p-5 min-w-0">
+    <div className="glass-card-hover p-3 sm:p-4 min-w-0">
       <div className="flex items-start justify-between">
-        <span className="text-[11px] sm:text-xs font-semibold uppercase tracking-wide leading-tight pr-2" style={{ color: "var(--ink-muted)" }}>
+        <span className="text-[11px] font-semibold uppercase tracking-[0.04em] leading-tight pr-2" style={{ color: "var(--ink-muted)" }}>
           {label}
         </span>
         <div
-          className="flex items-center justify-center h-8 w-8 sm:h-9 sm:w-9 rounded-xl shrink-0"
+          className="flex items-center justify-center h-7 w-7 sm:h-8 sm:w-8 rounded-[9px] shrink-0"
           style={{ backgroundColor: toneBg }}
         >
-          <Icon size={17} style={{ color: toneColor }} strokeWidth={2} />
+          <Icon size={15} style={{ color: toneColor }} strokeWidth={2} />
         </div>
       </div>
-      <div className="mt-2 sm:mt-3 text-[22px] sm:text-[28px] font-bold tabular-nums tracking-tight truncate" style={{ color: "var(--ink-primary)" }}>
+      <div className="mt-1.5 sm:mt-2 text-[21px] sm:text-[25px] font-semibold tabular-nums tracking-[-0.025em] truncate" style={{ color: "var(--ink-primary)" }}>
         {value}
       </div>
-      <div className="mt-1 sm:mt-1.5 flex items-center gap-1.5 text-[11px] sm:text-xs min-h-[16px] truncate">
+      <div className="mt-0.5 sm:mt-1 flex items-center gap-1.5 text-[11.5px] min-h-[16px] truncate">
         {trend && (
           <span
             className="inline-flex items-center gap-0.5 font-semibold"

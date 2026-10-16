@@ -137,7 +137,7 @@ export default function TodosPage() {
   const pct = total ? Math.round((doneCount / total) * 100) : 0;
 
   return (
-    <div className="flex flex-col gap-5 flex-1 min-h-0">
+    <div className="flex flex-col gap-4 flex-1 min-h-0">
       <PageHeader
         title="Todo Lists"
         description="Personal and shared checklists."
@@ -201,7 +201,7 @@ export default function TodosPage() {
             })}
           </nav>
 
-          <section className="lg:col-span-3 glass-card p-5 flex flex-col min-h-0">
+          <section className="lg:col-span-3 glass-card p-4 flex flex-col min-h-0">
             <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
               <div className="min-w-0">
                 <h2 className="text-base font-semibold truncate" style={{ color: "var(--ink-primary)" }}>

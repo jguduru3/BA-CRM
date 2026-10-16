@@ -197,7 +197,7 @@ export function ChatPanel({
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto thin-scroll px-3 sm:px-5 py-4 space-y-1.5" style={{ backgroundColor: "rgb(var(--panel-border) / 0.03)" }}>
+      <div className="flex-1 overflow-y-auto thin-scroll px-3 sm:px-4 py-4 space-y-1.5" style={{ backgroundColor: "rgb(var(--panel-border) / 0.03)" }}>
         {thread.isError ? (
           <QueryError compact error={thread.error} onRetry={() => thread.refetch()} title="Couldn't load the conversation" />
         ) : thread.isLoading ? (

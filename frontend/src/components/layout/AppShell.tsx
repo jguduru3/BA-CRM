@@ -15,7 +15,7 @@ export function AppShell() {
         <Topbar />
         {/* .app-main reserves room for the bottom bar (+ safe area) below lg */}
         <main id="main-content" tabIndex={-1} className="app-main flex-1 overflow-y-auto thin-scroll focus:outline-none">
-          <div className="max-w-[1400px] mx-auto px-4 py-5 sm:p-6 lg:p-8 min-h-full flex flex-col">
+          <div className="max-w-[1480px] mx-auto px-3.5 py-3.5 sm:px-4 sm:py-4 lg:px-6 lg:py-4 min-h-full flex flex-col">
             <Outlet />
           </div>
         </main>

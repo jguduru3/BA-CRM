@@ -31,7 +31,7 @@ export function LeadForm({
   const set = <K extends keyof Lead>(k: K, v: Lead[K]) => onChange({ [k]: v } as LeadDraft);
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <SectionTitle>Basic info</SectionTitle>
       <FieldGrid>
         <Field label="Name" required className="sm:col-span-2">

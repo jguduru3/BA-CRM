@@ -122,7 +122,7 @@ export default function AuditLogPage() {
 
   if (!allowed) {
     return (
-      <div className="flex flex-col gap-5">
+      <div className="flex flex-col gap-4">
         <PageHeader title="Audit Log" icon={<History size={20} />} />
         <div className="glass-card">
           <EmptyState icon={ShieldOff} title="Managers and admins only" description="The audit log is available to Managers, VPs and Super Admins." />
@@ -136,7 +136,7 @@ export default function AuditLogPage() {
   const last = Math.min(total, page * size + rows.length);
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-4">
       <PageHeader
         title="Audit Log"
         description={
@@ -409,7 +409,7 @@ function EventDrawer({ id, initial, onClose }: { id: number | null; initial: Aud
           <Skeleton className="h-40 w-full" />
         </div>
       ) : (
-        <div className="space-y-6">
+        <div className="space-y-4">
           <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 text-sm">
             <Meta label="Action">
               <ActionBadge action={ev.action} />

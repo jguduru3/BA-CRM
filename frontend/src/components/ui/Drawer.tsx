@@ -34,14 +34,14 @@ export function Drawer({
 
   return createPortal(
     <div className="fixed inset-0 z-[70]">
-      <div className="fixed inset-0 bg-slate-950/35 backdrop-blur-sm animate-fade-in" onClick={onClose} aria-hidden />
+      <div className="fixed inset-0 bg-slate-950/25 backdrop-blur-[3px] animate-fade-in" onClick={onClose} aria-hidden />
       <div
         role="dialog"
         aria-modal="true"
-        className="fixed top-0 right-0 bottom-0 glass-strong glass-reveal shadow-glass-lg animate-slide-in-right flex flex-col"
-        style={{ width, maxWidth: "100vw" }}
+        className="fixed top-0 right-0 bottom-0 sm:top-2.5 sm:right-2.5 sm:bottom-2.5 glass-strong glass-reveal animate-slide-in-right flex flex-col sm:rounded-[22px] overflow-hidden"
+        style={{ width, maxWidth: "calc(100vw - 0px)" }}
       >
-        <div className="flex items-start justify-between gap-3 px-5 py-4 hairline border-b shrink-0">
+        <div className="flex items-start justify-between gap-3 px-4 py-3 hairline border-b shrink-0">
           <div className="min-w-0">
             <h2 className="text-[15px] font-semibold truncate" style={{ color: "var(--ink-primary)" }}>
               {title}
@@ -55,7 +55,7 @@ export function Drawer({
             </button>
           </div>
         </div>
-        <div className="flex-1 overflow-y-auto thin-scroll px-5 py-5">{children}</div>
+        <div className="flex-1 overflow-y-auto thin-scroll px-4 py-4">{children}</div>
       </div>
     </div>,
     document.body

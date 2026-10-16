@@ -211,7 +211,7 @@ export default function LeadsPage() {
   const activeQuery = view === "pipeline" ? pipeline : table.query;
 
   return (
-    <div className="flex flex-col gap-5 flex-1 min-h-0">
+    <div className="flex flex-col gap-4 flex-1 min-h-0">
       <PageHeader
         title="Leads"
         description={

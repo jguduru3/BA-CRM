@@ -13,12 +13,12 @@ export function EmptyState({
   action?: React.ReactNode;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center text-center py-16 px-6">
+    <div className="flex flex-col items-center justify-center text-center py-10 px-6">
       <div
-        className="flex items-center justify-center h-14 w-14 rounded-2xl mb-4"
+        className="flex items-center justify-center h-11 w-11 rounded-[14px] mb-3"
         style={{ backgroundColor: "rgb(var(--ring-brand) / 0.1)" }}
       >
-        <Icon size={24} style={{ color: "var(--brand-500)" }} strokeWidth={1.75} />
+        <Icon size={20} style={{ color: "var(--brand-500)" }} strokeWidth={1.75} />
       </div>
       <h3 className="text-sm font-semibold" style={{ color: "var(--ink-primary)" }}>
         {title}
@@ -28,7 +28,7 @@ export function EmptyState({
           {description}
         </p>
       )}
-      {action && <div className="mt-5">{action}</div>}
+      {action && <div className="mt-4">{action}</div>}
     </div>
   );
 }

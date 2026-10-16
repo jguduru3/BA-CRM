@@ -16,7 +16,7 @@ export function QueryError({
   return (
     <div
       role="alert"
-      className={`flex flex-col items-center justify-center text-center ${compact ? "py-6 px-4" : "py-14 px-6"}`}
+      className={`flex flex-col items-center justify-center text-center ${compact ? "py-4 px-4" : "py-14 px-6"}`}
     >
       <div
         className="flex items-center justify-center h-12 w-12 rounded-2xl mb-3"

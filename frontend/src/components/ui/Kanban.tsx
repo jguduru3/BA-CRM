@@ -94,7 +94,7 @@ export function Kanban<T extends { id: number }>({
               ))}
               {items.length === 0 && (
                 <div
-                  className="rounded-xl border border-dashed text-center text-xs py-6"
+                  className="rounded-xl border border-dashed text-center text-xs py-4"
                   style={{ borderColor: "rgb(var(--panel-border) / 0.15)", color: "var(--ink-muted)" }}
                 >
                   Drop here
