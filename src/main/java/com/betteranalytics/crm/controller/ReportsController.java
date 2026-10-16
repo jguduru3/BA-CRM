@@ -7,6 +7,9 @@ import com.betteranalytics.crm.core.ScopeSpecs;
 import com.betteranalytics.crm.core.Specs;
 import com.betteranalytics.crm.entity.*;
 import com.betteranalytics.crm.permission.PermissionService;
+import com.betteranalytics.crm.pipeline.PipelineAnalyticsService;
+import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.web.bind.annotation.RequestParam;
 import com.betteranalytics.crm.repository.UserRepository;
 import com.betteranalytics.crm.security.CurrentUser;
 import org.springframework.data.jpa.domain.Specification;
@@ -34,9 +37,12 @@ public class ReportsController {
     private final PermissionService permissionService;
     private final ScopeSpecs        scopes;
     private final Aggregates        aggregates;
+    private final PipelineAnalyticsService analytics;
 
     public ReportsController(UserRepository userRepository, CurrentUser currentUser,
-                             PermissionService permissionService, ScopeSpecs scopes, Aggregates aggregates) {
+                             PermissionService permissionService, ScopeSpecs scopes, Aggregates aggregates,
+                             PipelineAnalyticsService analytics) {
+        this.analytics         = analytics;
         this.userRepository    = userRepository;
         this.currentUser       = currentUser;
         this.permissionService = permissionService;
@@ -99,13 +105,50 @@ public class ReportsController {
     @GetMapping("/funnel")
     public List<Map<String, Object>> funnel() {
         Map<Object, Bucket> byStage = leadStages(currentUser.get());
-        List<String> stages = List.of("New", "Contacted", "Meeting", "Proposal", "Negotiation", "Won");
+        // Columns come from the stages actually in use: the canonical order, keeping
+        // New and Won always and dropping stages no lead is in (e.g. an unused
+        // "Meeting"); custom stages in use are shown before Won. Lost is not a funnel step.
+        List<String> canonical = List.of("New", "Contacted", "Meeting", "Proposal", "Negotiation", "Won");
+        List<String> stages = new ArrayList<>();
+        for (String s : canonical) {
+            if (s.equals("Won")) {
+                byStage.keySet().stream().map(String::valueOf)
+                        .filter(k -> !canonical.contains(k) && !k.equals("Lost") && !k.equals("null"))
+                        .sorted().forEach(stages::add);
+            }
+            boolean used = byStage.getOrDefault(s, new Bucket(0, 0)).count() > 0;
+            if (used || s.equals("New") || s.equals("Won")) stages.add(s);
+        }
         return stages.stream().map(stage -> {
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("stage", stage);
             row.put("count", byStage.getOrDefault(stage, new Bucket(0, 0)).count());
             return row;
         }).collect(Collectors.toList());
+    }
+
+    // ── Pipeline analytics (deal funnel, win/loss, velocity) ───────────────
+
+    /** Deal stage conversion funnel (Pipedrive rule); open deals only with includeOpen=true. */
+    @GetMapping("/deal-funnel")
+    public Map<String, Object> dealFunnel(@RequestParam(defaultValue = "false") boolean includeOpen,
+                                          @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+                                          @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+        return analytics.funnel(currentUser.get(), includeOpen, from, to);
+    }
+
+    /** Won vs lost by owner and by close reason (closed deals, optionally by close date). */
+    @GetMapping("/win-loss")
+    public Map<String, Object> winLoss(@RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+                                       @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+        return analytics.winLoss(currentUser.get(), from, to);
+    }
+
+    /** Average days per stage (from stage history) and average days to close won. */
+    @GetMapping("/velocity")
+    public Map<String, Object> velocity(@RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+                                        @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+        return analytics.velocity(currentUser.get(), from, to);
     }
 
     @GetMapping("/lead-sources")

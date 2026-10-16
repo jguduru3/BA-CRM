@@ -7,6 +7,7 @@ import {
   Database,
   FileText,
   FolderKanban,
+  Gauge,
   Handshake,
   History,
   LayoutDashboard,
@@ -89,6 +90,7 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "Insights",
     items: [
       { to: "/reports", label: "Reports", icon: BarChart3 },
+      { to: "/forecast", label: "Forecast", icon: Gauge },
       { to: "/automations", label: "AI Automations", icon: Workflow, minRole: MANAGER_UP },
     ],
   },

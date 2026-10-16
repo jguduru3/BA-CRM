@@ -4,7 +4,14 @@ import { api } from "@/lib/api";
 import { toast } from "@/lib/toast";
 import { Modal } from "@/components/ui/Modal";
 import { QueryError } from "@/components/ui/QueryError";
-import type { PipelineSettings } from "@/features/crm/types";
+import type { PipelineSettings as BasePipelineSettings } from "@/features/crm/types";
+import { CLOSED_STAGES } from "@/features/crm/types";
+import { FORECAST_CATEGORIES, type ForecastCategoryKey } from "./pipelineTypes";
+
+export type PipelineSettings = BasePipelineSettings & {
+  /** Stage → forecast category (Won and Lost are fixed). */
+  stageForecastCategories?: Record<string, ForecastCategoryKey>;
+};
 
 export function usePipelineSettings() {
   return useQuery({
@@ -19,12 +26,14 @@ export function PipelineSettingsModal({ open, onClose }: { open: boolean; onClos
   const settings = usePipelineSettings();
   const qc = useQueryClient();
   const [probs, setProbs] = useState<Record<string, number>>({});
+  const [categories, setCategories] = useState<Record<string, ForecastCategoryKey>>({});
   const [threshold, setThreshold] = useState<string>("");
 
   useEffect(() => {
     if (settings.data && open) {
       setProbs(settings.data.stageProbabilities);
       setThreshold(settings.data.bigDealThreshold == null ? "" : String(settings.data.bigDealThreshold));
+      setCategories(settings.data.stageForecastCategories ?? {});
     }
   }, [settings.data, open]);
 
@@ -33,6 +42,7 @@ export function PipelineSettingsModal({ open, onClose }: { open: boolean; onClos
       (
         await api.put<PipelineSettings>("/pipeline-settings", {
           stageProbabilities: probs,
+          stageForecastCategories: Object.fromEntries(Object.entries(categories).filter(([s]) => !CLOSED_STAGES.includes(s))),
           bigDealThreshold: threshold === "" ? null : Number(threshold),
         })
       ).data,
@@ -89,6 +99,34 @@ export function PipelineSettingsModal({ open, onClose }: { open: boolean; onClos
                   </span>
                 </label>
               ))}
+            </div>
+          </div>
+          <div>
+            <p className="field-label">Forecast category by stage</p>
+            <p className="text-xs mb-3" style={{ color: "var(--ink-muted)" }}>
+              Ordered Not forecasted &lt; Pipeline &lt; Best case &lt; Commit &lt; Closed won. Deals follow their stage unless the rep picks a
+              category by hand. Won is always Closed won, Lost is never forecast.
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2.5">
+              {(settings.data?.stages ?? [])
+                .filter((s) => !CLOSED_STAGES.includes(s))
+                .map((stage) => (
+                  <label key={stage} className="flex items-center justify-between gap-3 text-sm" style={{ color: "var(--ink-secondary)" }}>
+                    <span className="truncate">{stage}</span>
+                    <select
+                      className="select w-36"
+                      aria-label={`Forecast category for ${stage}`}
+                      value={categories[stage] ?? "PIPELINE"}
+                      onChange={(e) => setCategories((c) => ({ ...c, [stage]: e.target.value as ForecastCategoryKey }))}
+                    >
+                      {FORECAST_CATEGORIES.filter((c) => c.key !== "CLOSED_WON").map((c) => (
+                        <option key={c.key} value={c.key}>
+                          {c.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ))}
             </div>
           </div>
           <div>

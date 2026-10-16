@@ -26,6 +26,10 @@ public class PipelineSettings {
     @Column(name = "stage_probabilities", nullable = false, columnDefinition = "TEXT")
     private String stageProbabilities;
 
+    /** V61 — JSON object stage → forecast category key; null = defaults. */
+    @Column(name = "stage_forecast_categories", columnDefinition = "TEXT")
+    private String stageForecastCategories;
+
     @Column(name = "big_deal_threshold")
     private Long bigDealThreshold;
 

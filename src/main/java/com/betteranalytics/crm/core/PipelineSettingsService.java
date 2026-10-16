@@ -1,9 +1,11 @@
 package com.betteranalytics.crm.core;
 
+import com.betteranalytics.crm.entity.ForecastCategory;
 import com.betteranalytics.crm.entity.Opportunity;
 import com.betteranalytics.crm.entity.PipelineSettings;
 import com.betteranalytics.crm.entity.Role;
 import com.betteranalytics.crm.entity.User;
+import com.betteranalytics.crm.pipeline.StageHistoryService;
 import com.betteranalytics.crm.repository.PipelineSettingsRepository;
 import com.betteranalytics.crm.repository.UserRepository;
 import com.betteranalytics.crm.service.NotificationService;
@@ -17,8 +19,9 @@ import java.time.Instant;
 import java.util.*;
 
 /**
- * Organisation-level pipeline configuration: default win probability per stage
- * and the "big deal" threshold that alerts managers.
+ * Organisation-level pipeline configuration: default win probability per stage,
+ * the stage → forecast category mapping (HubSpot model) and the "big deal"
+ * threshold that alerts managers.
  */
 @Service
 public class PipelineSettingsService {
@@ -41,33 +44,60 @@ public class PipelineSettingsService {
         m.put("Lost", 0);
         DEFAULT_PROBABILITIES = Collections.unmodifiableMap(m);
     }
+
+    /** Default stage → forecast category. Won and Lost are fixed; open stages are configurable. */
+    public static final Map<String, ForecastCategory> DEFAULT_CATEGORIES;
+    static {
+        Map<String, ForecastCategory> m = new LinkedHashMap<>();
+        m.put("Qualification", ForecastCategory.PIPELINE);
+        m.put("Proposal", ForecastCategory.PIPELINE);
+        m.put("Negotiation", ForecastCategory.BEST_CASE);
+        m.put("Verbal Commit", ForecastCategory.COMMIT);
+        m.put("Won", ForecastCategory.CLOSED_WON);
+        m.put("Lost", ForecastCategory.NOT_FORECASTED);
+        DEFAULT_CATEGORIES = Collections.unmodifiableMap(m);
+    }
     public static final long DEFAULT_BIG_DEAL_THRESHOLD = 1_000_000L;
 
     private final PipelineSettingsRepository repository;
     private final UserRepository userRepository;
     private final NotificationService notificationService;
     private final ObjectMapper objectMapper;
+    private final StageHistoryService stageHistory;
 
     public PipelineSettingsService(PipelineSettingsRepository repository, UserRepository userRepository,
-                                   NotificationService notificationService, ObjectMapper objectMapper) {
+                                   NotificationService notificationService, ObjectMapper objectMapper,
+                                   StageHistoryService stageHistory) {
         this.repository = repository;
         this.userRepository = userRepository;
         this.notificationService = notificationService;
         this.objectMapper = objectMapper;
+        this.stageHistory = stageHistory;
     }
 
     /** Effective settings for an org (defaults when none are stored). */
-    public record Settings(Map<String, Integer> stageProbabilities, Long bigDealThreshold) {
+    public record Settings(Map<String, Integer> stageProbabilities, Long bigDealThreshold,
+                           Map<String, ForecastCategory> stageForecastCategories) {
+        public Settings(Map<String, Integer> stageProbabilities, Long bigDealThreshold) {
+            this(stageProbabilities, bigDealThreshold, DEFAULT_CATEGORIES);
+        }
+
         public int probabilityFor(String stage) {
             Integer p = stageProbabilities.get(stage);
             if (p == null) p = DEFAULT_PROBABILITIES.getOrDefault(stage, 50);
             return p;
         }
+
+        public ForecastCategory categoryFor(String stage) {
+            ForecastCategory c = stageForecastCategories == null ? null : stageForecastCategories.get(stage);
+            if (c == null) c = DEFAULT_CATEGORIES.getOrDefault(stage, ForecastCategory.PIPELINE);
+            return c;
+        }
     }
 
     public Settings get(Long orgId) {
         return repository.findByOrganizationId(orgId).map(this::toSettings)
-                .orElseGet(() -> new Settings(DEFAULT_PROBABILITIES, DEFAULT_BIG_DEAL_THRESHOLD));
+                .orElseGet(() -> new Settings(DEFAULT_PROBABILITIES, DEFAULT_BIG_DEAL_THRESHOLD, DEFAULT_CATEGORIES));
     }
 
     private Settings toSettings(PipelineSettings s) {
@@ -78,12 +108,40 @@ public class PipelineSettingsService {
         } catch (Exception e) {
             log.warn("pipeline_settings for org {} has unreadable stage_probabilities; using defaults", s.getOrganizationId());
         }
-        return new Settings(Collections.unmodifiableMap(merged), s.getBigDealThreshold());
+        Map<String, ForecastCategory> categories = new LinkedHashMap<>(DEFAULT_CATEGORIES);
+        if (s.getStageForecastCategories() != null && !s.getStageForecastCategories().isBlank()) {
+            try {
+                Map<String, String> stored = objectMapper.readValue(s.getStageForecastCategories(), new TypeReference<>() {});
+                stored.forEach((k, v) -> {
+                    if (STAGES.contains(k) && !CLOSED_STAGES.contains(k) && v != null) {
+                        try {
+                            ForecastCategory c = ForecastCategory.parse(v);
+                            if (c != ForecastCategory.CLOSED_WON) categories.put(k, c);
+                        } catch (IllegalArgumentException ignored) {
+                            // unknown stored value: keep the default
+                        }
+                    }
+                });
+            } catch (Exception e) {
+                log.warn("pipeline_settings for org {} has unreadable stage_forecast_categories; using defaults", s.getOrganizationId());
+            }
+        }
+        return new Settings(Collections.unmodifiableMap(merged), s.getBigDealThreshold(), Collections.unmodifiableMap(categories));
     }
 
     /** Validates and stores new settings; returns {before, after}. */
     public Settings[] save(Long orgId, Long actorId, Map<String, Integer> probabilities, Long threshold,
                            boolean thresholdPresent) {
+        return save(orgId, actorId, probabilities, threshold, thresholdPresent, null);
+    }
+
+    /**
+     * Validates and stores new settings; returns {before, after}. {@code categories}
+     * maps open stages to NOT_FORECASTED / PIPELINE / BEST_CASE / COMMIT; Won is
+     * always CLOSED_WON and Lost always NOT_FORECASTED.
+     */
+    public Settings[] save(Long orgId, Long actorId, Map<String, Integer> probabilities, Long threshold,
+                           boolean thresholdPresent, Map<String, String> categories) {
         Settings before = get(orgId);
         Map<String, Integer> merged = new LinkedHashMap<>(before.stageProbabilities());
         if (probabilities != null) {
@@ -98,6 +156,24 @@ public class PipelineSettingsService {
                 merged.put(e.getKey(), v);
             }
         }
+        Map<String, ForecastCategory> mergedCategories = new LinkedHashMap<>(before.stageForecastCategories());
+        if (categories != null) {
+            for (Map.Entry<String, String> e : categories.entrySet()) {
+                String stage = e.getKey();
+                if (!STAGES.contains(stage)) {
+                    throw new IllegalArgumentException("unknown stage '" + stage + "'; stages are " + STAGES);
+                }
+                ForecastCategory c = ForecastCategory.parse(e.getValue());
+                if (CLOSED_STAGES.contains(stage)) {
+                    if (c != DEFAULT_CATEGORIES.get(stage)) {
+                        throw new IllegalArgumentException(stage + " deals are always " + DEFAULT_CATEGORIES.get(stage));
+                    }
+                } else if (c == ForecastCategory.CLOSED_WON) {
+                    throw new IllegalArgumentException("only Won deals can be CLOSED_WON");
+                }
+                mergedCategories.put(stage, c);
+            }
+        }
         Long newThreshold = thresholdPresent ? threshold : before.bigDealThreshold();
         if (newThreshold != null && newThreshold < 0) throw new IllegalArgumentException("bigDealThreshold must not be negative");
 
@@ -109,6 +185,9 @@ public class PipelineSettingsService {
         });
         try {
             row.setStageProbabilities(objectMapper.writeValueAsString(merged));
+            Map<String, String> stored = new LinkedHashMap<>();
+            mergedCategories.forEach((k, v) -> stored.put(k, v.name()));
+            row.setStageForecastCategories(objectMapper.writeValueAsString(stored));
         } catch (Exception e) {
             throw new IllegalStateException("could not store pipeline settings");
         }
@@ -116,7 +195,30 @@ public class PipelineSettingsService {
         row.setUpdatedBy(actorId);
         row.setUpdatedAt(Instant.now());
         repository.save(row);
-        return new Settings[]{before, new Settings(Collections.unmodifiableMap(merged), newThreshold)};
+        return new Settings[]{before, new Settings(Collections.unmodifiableMap(merged), newThreshold,
+                Collections.unmodifiableMap(mergedCategories))};
+    }
+
+    // ── Forecast category + stage history for new deals ──────────────────────────
+
+    /**
+     * Fills the stage-driven defaults of a deal that is about to be inserted:
+     * the forecast category (unless the caller set an override) and the time it
+     * entered its stage. Call before the first save.
+     */
+    public void applyNewDealDefaults(Opportunity opp) {
+        if (opp.getForecastCategory() == null || !opp.isForecastCategoryOverridden()) {
+            opp.setForecastCategory(get(opp.getOrganizationId()).categoryFor(opp.getStage()));
+            opp.setForecastCategoryOverridden(false);
+        }
+        if (opp.getStageEnteredAt() == null) {
+            opp.setStageEnteredAt(opp.getCreatedAt() != null ? opp.getCreatedAt() : Instant.now());
+        }
+    }
+
+    /** Writes the deal's first stage-history row. Call after the first save (the id is needed). */
+    public void recordNewDeal(Opportunity opp, Long actorId) {
+        stageHistory.recordCreated(opp, actorId);
     }
 
     // ── Big-deal alerts ──────────────────────────────────────────────────────────

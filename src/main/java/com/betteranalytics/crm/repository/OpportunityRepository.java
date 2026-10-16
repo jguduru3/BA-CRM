@@ -54,4 +54,35 @@ public interface OpportunityRepository extends JpaRepository<Opportunity, Long>,
     @Query(value = "UPDATE opportunities SET deleted_at = NULL, deleted_by = NULL, delete_reason = NULL " +
                    "WHERE organization_id = :orgId AND company_id = :companyId AND delete_reason = :reason", nativeQuery = true)
     int restoreByCompany(@Param("orgId") Long orgId, @Param("companyId") Long companyId, @Param("reason") String reason);
+
+    // ── V61+: pipeline intelligence (forecast categories, deal health) ──────────
+
+    /** Keyset batch of open deals for the nightly health job. */
+    @Query("SELECT o FROM Opportunity o WHERE o.stage NOT IN :closed AND o.id > :after ORDER BY o.id")
+    List<Opportunity> findOpenAfter(@Param("closed") java.util.Collection<String> closed, @Param("after") long after,
+                                    org.springframework.data.domain.Pageable page);
+
+    /**
+     * Stores a recomputed health score without bumping the optimistic-lock version
+     * (a background recompute must not make an open edit form stale). Conditional on
+     * the flags the caller read, so two concurrent recomputes notify only once.
+     */
+    @Modifying(clearAutomatically = true)
+    @Query("UPDATE Opportunity o SET o.healthScore = :score, o.healthFactors = :factors, o.healthFlags = :flags, " +
+           "o.healthComputedAt = :at WHERE o.id = :id AND COALESCE(o.healthFlags, '') = :expectedFlags")
+    int updateHealth(@Param("id") Long id, @Param("score") Integer score, @Param("factors") String factors,
+                     @Param("flags") String flags, @Param("at") Instant at, @Param("expectedFlags") String expectedFlags);
+
+    @Modifying(clearAutomatically = true)
+    @Query("UPDATE Opportunity o SET o.healthScore = NULL, o.healthFactors = NULL, o.healthFlags = NULL " +
+           "WHERE o.stage IN :closed AND (o.healthScore IS NOT NULL OR o.healthFlags IS NOT NULL)")
+    int clearHealthOfClosed(@Param("closed") java.util.Collection<String> closed);
+
+    @Query("SELECT o FROM Opportunity o WHERE o.forecastCategory IS NULL ORDER BY o.id")
+    List<Opportunity> findWithoutForecastCategory(org.springframework.data.domain.Pageable page);
+
+    @Modifying(clearAutomatically = true)
+    @Query("UPDATE Opportunity o SET o.forecastCategory = :category, o.forecastCategoryOverridden = false " +
+           "WHERE o.id = :id AND o.forecastCategory IS NULL")
+    int fillForecastCategory(@Param("id") Long id, @Param("category") com.betteranalytics.crm.entity.ForecastCategory category);
 }

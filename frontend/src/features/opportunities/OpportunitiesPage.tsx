@@ -23,6 +23,9 @@ import { CLOSED_STAGES, type OpportunityRecord } from "@/features/crm/types";
 import { useDebounced, useServerList } from "@/features/crm/useServerList";
 import { OppDraft, OpportunityForm, OPP_STAGES } from "./OpportunityForm";
 import { OpportunityKanbanCard } from "./OpportunityKanbanCard";
+import { DealInsights } from "./DealInsights";
+import { HealthBadge } from "./HealthBadge";
+import type { DealRecord } from "./pipelineTypes";
 import { PipelineSettingsModal, usePipelineSettings } from "./PipelineSettingsModal";
 import { AttachmentList } from "@/components/ui/AttachmentList";
 import { RecordPagePanel } from "@/features/recordpages/RecordPagePanel";
@@ -218,6 +221,16 @@ export default function OpportunitiesPage() {
       ),
     },
     {
+      key: "health",
+      header: "Health",
+      align: "right",
+      hideOnMobile: true,
+      render: (r) => {
+        const d = r as DealRecord;
+        return d.healthScore == null ? <span className="text-sm" style={{ color: "var(--ink-muted)" }}>—</span> : <HealthBadge score={d.healthScore} factors={d.healthFactors} />;
+      },
+    },
+    {
       key: "closeDate",
       header: "Close date",
       sortKey: "closeDate",
@@ -403,12 +416,14 @@ export default function OpportunitiesPage() {
             </span>
           </div>
         )}
+        {selected && <DealInsights deal={selected} userName={userName} />}
         <OpportunityForm
           value={draft}
           onChange={(p) => setDraft((d) => ({ ...d, ...p }))}
           canEditProbability={manager}
           canEditPoStatus={manager}
           stageDefault={stageDefault(draft.stage)}
+          stageCategory={settings.data?.stageForecastCategories?.[draft.stage ?? "Qualification"]}
           valueHidden={valueHidden}
         />
         {selected && (

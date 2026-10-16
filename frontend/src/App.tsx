@@ -15,6 +15,7 @@ const OpportunitiesPage = lazy(() => import("@/features/opportunities/Opportunit
 const TasksPage = lazy(() => import("@/features/tasks/TasksPage"));
 const ActivitiesPage = lazy(() => import("@/features/activities/ActivitiesPage"));
 const ReportsPage = lazy(() => import("@/features/reports/ReportsPage"));
+const ForecastPage = lazy(() => import("@/features/forecast/ForecastPage"));
 const TeamPage = lazy(() => import("@/features/team/TeamPage"));
 const TeamsAdminPage = lazy(() => import("@/features/team/TeamsAdminPage"));
 const DepartmentsPage = lazy(() => import("@/features/team/DepartmentsPage"));
@@ -57,6 +58,7 @@ export default function App() {
               <Route path="/tasks" element={<TasksPage />} />
               <Route path="/activities" element={<ActivitiesPage />} />
               <Route path="/reports" element={<ReportsPage />} />
+              <Route path="/forecast" element={<ForecastPage />} />
               <Route path="/team" element={<TeamPage />} />
               <Route path="/teams" element={<TeamsAdminPage />} />
               <Route path="/departments" element={<DepartmentsPage />} />
