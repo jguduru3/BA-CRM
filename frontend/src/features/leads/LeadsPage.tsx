@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Hand, Plus, Target } from "lucide-react";
+import { Hand, Plus, Shuffle, Target } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api, getList } from "@/lib/api";
-import { isReadOnly, useAuthStore } from "@/lib/auth";
+import { isManagerUp, isReadOnly, useAuthStore } from "@/lib/auth";
 import { useCompaniesLookup, useUsersLookup } from "@/lib/hooks";
 import { formatCompactCurrency, formatDate, formatRelative, isOverdue } from "@/lib/format";
 import { toast } from "@/lib/toast";
@@ -20,6 +20,7 @@ import type { LeadRecord } from "@/features/crm/types";
 import { useServerList } from "@/features/crm/useServerList";
 import { LeadDrawer } from "./LeadDrawer";
 import { LeadKanbanCard } from "./LeadKanbanCard";
+import { LeadRoutingSettings } from "./LeadRoutingSettings";
 import { LEAD_SOURCES, LEAD_STAGES, PRIORITIES } from "./LeadForm";
 
 const STAGE_ACCENTS: Record<string, string> = {
@@ -50,6 +51,7 @@ export default function LeadsPage() {
   const [overdue, setOverdue] = useState(false);
   const [selected, setSelected] = useState<LeadRecord | null>(null);
   const [creating, setCreating] = useState(false);
+  const [routingOpen, setRoutingOpen] = useState(false);
   const qc = useQueryClient();
   const role = useAuthStore((s) => s.user?.role);
   const readOnly = isReadOnly(role);
@@ -83,13 +85,16 @@ export default function LeadsPage() {
     if (!id) return;
     api
       .get<LeadRecord>(`/leads/${id}`)
-      .then((r) => setSelected(r.data))
+      .then((r) => {
+        setCreating(false);
+        setSelected(r.data);
+      })
       .catch((e) => toast.error(e instanceof Error ? e.message : "Lead not found"));
     params.delete("open");
     params.delete("id");
     setParams(params, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [params.get("open") ?? params.get("id")]);
 
   const claim = useMutation({
     mutationFn: async (id: number) => (await api.post<LeadRecord>(`/leads/${id}/claim`)).data,
@@ -218,6 +223,11 @@ export default function LeadsPage() {
         actions={
           <>
             <ExportButton type="leads" />
+            {isManagerUp(role) && !readOnly && (
+              <button className="btn-secondary" onClick={() => setRoutingOpen(true)} title="Round-robin lead routing">
+                <Shuffle size={15} /> <span className="hidden sm:inline">Routing</span>
+              </button>
+            )}
             {!readOnly && (
               <button className="btn-primary" onClick={() => setCreating(true)}>
                 <Plus size={15} /> <span className="hidden sm:inline">New lead</span>
@@ -315,6 +325,7 @@ export default function LeadsPage() {
 
       <LeadDrawer lead={selected} open={!!selected} onClose={() => setSelected(null)} />
       <LeadDrawer lead={null} open={creating} onClose={() => setCreating(false)} />
+      <LeadRoutingSettings open={routingOpen} onClose={() => setRoutingOpen(false)} />
     </div>
   );
 }

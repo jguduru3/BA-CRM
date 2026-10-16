@@ -16,6 +16,9 @@ import { LeadForm } from "./LeadForm";
 import type { LeadDraft } from "./LeadForm";
 import { AiAssistPanel } from "./AiAssistPanel";
 import { RecordPagePanel } from "@/features/recordpages/RecordPagePanel";
+import { DuplicateDialog } from "@/features/duplicates/DuplicateDialog";
+import { isDuplicateError, saveChecked } from "@/features/duplicates/duplicates";
+import type { DuplicateError } from "@/features/duplicates/duplicates";
 
 export function LeadDrawer({
   lead,
@@ -31,6 +34,7 @@ export function LeadDrawer({
   const [draft, setDraft] = useState<LeadDraft>({});
   const [scoreOpen, setScoreOpen] = useState(false);
   const [scoreValue, setScoreValue] = useState(0);
+  const [duplicate, setDuplicate] = useState<DuplicateError | null>(null);
   const qc = useQueryClient();
   const navigate = useNavigate();
   const user = useAuthStore((s) => s.user);
@@ -44,7 +48,7 @@ export function LeadDrawer({
   const invalidate = () => qc.invalidateQueries({ queryKey: ["leads"] });
 
   const save = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (allowDuplicate: boolean = false) => {
       if (lead) {
         // Send only what changed (+ the version we loaded): untouched fields can't
         // clobber someone else's edit, and a concurrent change comes back as 409.
@@ -54,17 +58,18 @@ export function LeadDrawer({
         }
         const version = (lead as { version?: number }).version;
         if (version !== undefined) changed.version = version;
-        return (await api.patch<Lead>(`/leads/${lead.id}`, changed)).data;
+        return saveChecked<Lead>("patch", `/leads/${lead.id}`, changed, "lead", allowDuplicate);
       }
-      return (await api.post<Lead>("/leads", draft)).data;
+      return saveChecked<Lead>("post", "/leads", draft, "lead", allowDuplicate);
     },
     onSuccess: () => {
+      setDuplicate(null);
       toast.success(lead ? "Lead updated" : "Lead created");
       invalidate();
       onSaved?.();
       onClose();
     },
-    onError: (e: Error) => toast.error(saveErrorMessage(e, "lead")),
+    onError: (e: Error) => (isDuplicateError(e) ? setDuplicate(e) : toast.error(saveErrorMessage(e, "lead"))),
   });
 
   const claim = useMutation({
@@ -222,7 +227,7 @@ export function LeadDrawer({
             Cancel
           </button>
           {!readOnly && (
-            <button className="btn-primary" disabled={!draft.name || save.isPending} onClick={() => save.mutate()}>
+            <button className="btn-primary" disabled={!draft.name || save.isPending} onClick={() => save.mutate(false)}>
               {save.isPending ? "Saving…" : lead ? "Save changes" : "Create lead"}
             </button>
           )}
@@ -269,6 +274,12 @@ export function LeadDrawer({
         </div>
       </Modal>
       {reasonNode}
+      <DuplicateDialog
+        error={duplicate}
+        saving={save.isPending}
+        onClose={() => setDuplicate(null)}
+        onSaveAnyway={() => save.mutate(true)}
+      />
     </>
   );
 }
