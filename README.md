@@ -9,6 +9,11 @@ Spring Boot 3 / Java 21 backend, React 18 / TypeScript / Vite frontend, PostgreS
 (Flyway-migrated), file storage that works locally today and is an Azure Blob
 drop-in later.
 
+> **Start here:** [ABOUT.md](ABOUT.md) is the complete guide: every feature, the
+> developer documentation (architecture, codebase map, security, APIs, testing, how to
+> extend) and the roadmap. Operators: [DEPLOYMENT.md](DEPLOYMENT.md). Integrators:
+> [docs/MASTER_API.md](docs/MASTER_API.md).
+
 ## Verification status
 
 Everything below was actually run in this environment, not just reviewed — see
@@ -17,14 +22,12 @@ bugs that were found and fixed by running things rather than by reading them).
 
 | Layer | Status |
 |---|---|
-| Backend compiles | ✅ `mvn compile` clean (157 Java files, zero errors) |
-| Backend boots + migrates | ✅ All Flyway migrations apply (H2 in the test suite; PostgreSQL via Testcontainers in CI) |
-| Backend tests | ✅ `./mvnw test` — MockMvc + real-HTTP tests for auth, permissions, audit log, Master API, webhooks |
-| Backend endpoints | ✅ Smoke-tested live: auth, leads, contacts, whiteboards, attachments, reports, automations |
-| Frontend typechecks | ✅ `tsc --noEmit` clean across ~65 files |
-| Frontend builds | ✅ `vite build` succeeds, all routes code-split |
-| Docker build | ⚠️ Dockerfiles/compose written and reviewed, **not executed** — no Docker daemon in this sandbox |
-| Real PostgreSQL | ⚠️ Not reachable in this sandbox — verified instead against H2 in PostgreSQL-compatibility mode, which caught and fixed 3 real cross-engine SQL bugs (see below) |
+| Backend tests | ✅ `./mvnw verify`: 375 tests (JUnit 5 + MockMvc on H2, every Flyway migration V1–V81 applied), 0 failures; production jar builds |
+| PostgreSQL | ⏳ `PostgresMigrationIT` (Testcontainers) runs in CI; skipped where Docker is unavailable |
+| End-to-end | ✅ 78-step API walkthrough of every module on a fresh install passes |
+| Frontend | ✅ `npm run lint` (ESLint + tsc, zero warnings), `npm test` (81 Vitest tests), `npm run build` |
+| UI | ✅ Every route reviewed headlessly at desktop (light + dark) and phone width, zero console errors |
+| Docker / Azure services | ⏳ Image builds and live SMTP/IMAP/ACS/Notification Hubs/Meta calls need a real environment (fakes in tests) |
 
 ## What's implemented
 
