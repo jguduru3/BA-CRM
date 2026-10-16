@@ -29,10 +29,10 @@ export function Topbar() {
     >
       <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
         <MobileNavButton />
-        <Logo height={24} className="lg:hidden hidden min-[420px]:block shrink-0" />
+        <Logo height={24} className="lg:hidden block shrink-0" />
         <button
           onClick={() => setPaletteOpen(true)}
-          className="group flex items-center gap-2.5 h-10 w-full max-w-md rounded-xl px-3 sm:px-3.5 text-sm transition-all glass-solid hover:border-[rgb(var(--ring-brand)/0.35)] focus-brand"
+          className="group flex items-center justify-center sm:justify-start gap-2.5 h-10 w-10 sm:w-full max-w-md rounded-xl sm:px-3.5 text-sm transition-all glass-solid hover:border-[rgb(var(--ring-brand)/0.35)] focus-brand ml-auto sm:ml-0"
           style={{ color: "var(--ink-muted)" }}
           aria-label="Search"
         >

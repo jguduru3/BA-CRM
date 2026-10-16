@@ -131,7 +131,7 @@ export default function ProjectsPage() {
     <div className="flex flex-col gap-5">
       <PageHeader
         title="Projects"
-        description={`${list.data?.length ?? 0} projects · track milestones, people and files`}
+        description={`${list.data?.length ?? 0} ${(list.data?.length ?? 0) === 1 ? "project" : "projects"} · track milestones, people and files`}
         icon={<FolderKanban size={20} />}
         actions={
           !readOnly && (

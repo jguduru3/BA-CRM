@@ -110,7 +110,7 @@ export default function SettingsPage() {
               <input className="input" maxLength={4} value={profile.initials} onChange={(e) => setProfile((p) => ({ ...p, initials: e.target.value.toUpperCase() }))} />
             </Field>
             <Field label="Avatar color">
-              <input type="color" className="input h-10" value={profile.color} onChange={(e) => setProfile((p) => ({ ...p, color: e.target.value }))} />
+              <input type="color" className="input h-10 w-16 p-1 cursor-pointer" aria-label="Avatar color" value={profile.color} onChange={(e) => setProfile((p) => ({ ...p, color: e.target.value }))} />
             </Field>
           </FieldGrid>
           <div className="flex justify-end">
