@@ -1,6 +1,7 @@
 package com.betteranalytics.crm.config;
 
 import com.betteranalytics.crm.security.ApiKeyAuthFilter;
+import com.betteranalytics.crm.security.IdempotencyFilter;
 import com.betteranalytics.crm.security.JsonErrors;
 import com.betteranalytics.crm.security.JwtAuthFilter;
 import com.betteranalytics.crm.security.RateLimitFilter;
@@ -19,6 +20,7 @@ import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.access.intercept.AuthorizationFilter;
 import org.springframework.security.web.firewall.RequestRejectedHandler;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
@@ -41,6 +43,13 @@ public class SecurityConfig {
     private final ApiKeyAuthFilter apiKeyAuthFilter;
     private final RateLimitFilter rateLimitFilter;
     private final List<String> allowedOrigins;
+    private IdempotencyFilter idempotencyFilter;
+
+    /** Idempotency-Key handling runs after authentication and authorization (see IdempotencyFilter). */
+    @org.springframework.beans.factory.annotation.Autowired
+    void setIdempotencyFilter(IdempotencyFilter idempotencyFilter) {
+        this.idempotencyFilter = idempotencyFilter;
+    }
 
     public SecurityConfig(JwtAuthFilter jwtAuthFilter, ApiKeyAuthFilter apiKeyAuthFilter,
                           RateLimitFilter rateLimitFilter,
@@ -109,7 +118,8 @@ public class SecurityConfig {
             )
             .addFilterBefore(rateLimitFilter, UsernamePasswordAuthenticationFilter.class)
             .addFilterBefore(apiKeyAuthFilter, UsernamePasswordAuthenticationFilter.class)
-            .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
+            .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class)
+            .addFilterAfter(idempotencyFilter, AuthorizationFilter.class);
         return http.build();
     }
 
@@ -167,6 +177,13 @@ public class SecurityConfig {
     @Bean
     public FilterRegistrationBean<RateLimitFilter> rateLimitFilterRegistration(RateLimitFilter f) {
         FilterRegistrationBean<RateLimitFilter> r = new FilterRegistrationBean<>(f);
+        r.setEnabled(false);
+        return r;
+    }
+
+    @Bean
+    public FilterRegistrationBean<IdempotencyFilter> idempotencyFilterRegistration(IdempotencyFilter f) {
+        FilterRegistrationBean<IdempotencyFilter> r = new FilterRegistrationBean<>(f);
         r.setEnabled(false);
         return r;
     }

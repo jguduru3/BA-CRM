@@ -46,5 +46,6 @@ public enum ResourceType {
     TEAM,
     WHATSAPP,
     AUDIT_LOG,
-    INTEGRATION
+    INTEGRATION,
+    SEQUENCE
 }

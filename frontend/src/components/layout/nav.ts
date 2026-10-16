@@ -17,6 +17,7 @@ import {
   MessageCircle,
   Network,
   Plug,
+  Repeat,
   Settings,
   StickyNote,
   Target,
@@ -84,6 +85,8 @@ export const NAV_GROUPS: NavGroup[] = [
       { to: "/activities", label: "Activity Timeline", icon: Activity },
       { to: "/campaigns", label: "Campaigns", icon: Megaphone },
       { to: "/whatsapp", label: "WhatsApp", icon: MessageCircle },
+      // Everyone sees sequences (reps enroll their records); only Manager+ builds them.
+      { to: "/sequences", label: "Sequences", icon: Repeat },
     ],
   },
   {

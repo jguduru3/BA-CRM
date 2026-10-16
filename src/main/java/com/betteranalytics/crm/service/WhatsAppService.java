@@ -12,7 +12,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import com.betteranalytics.crm.sequences.SequenceSignals;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
@@ -72,6 +75,10 @@ public class WhatsAppService {
 
     @Value("${app.whatsapp.allow-unsigned-webhooks:false}")
     private boolean allowUnsignedWebhooks;
+
+    /** Inbound replies / delivery failures are published for sequences (exit + channel skip). */
+    @Autowired(required = false)
+    private ApplicationEventPublisher events;
 
     public WhatsAppService(WhatsAppAccountRepository accountRepo,
                            WhatsAppMessageRepository messageRepo,
@@ -411,6 +418,16 @@ public class WhatsAppService {
             notificationService.notify(orgId, link.ownerId(), "whatsapp_reply", title, preview,
                     link.relatedType(), link.relatedId());
         }
+        publish(new SequenceSignals.WhatsAppInbound(orgId, normalized, type, Instant.now()));
+    }
+
+    private void publish(Object event) {
+        if (events == null) return;
+        try {
+            events.publishEvent(event);
+        } catch (Exception e) {
+            log.warn("WhatsApp event listener failed: {}", e.toString());
+        }
     }
 
     /**
@@ -443,6 +460,9 @@ public class WhatsAppService {
             }
             msg.setUpdatedAt(now);
             messageRepo.save(msg);
+            if ("failed".equals(status)) {
+                publish(new SequenceSignals.WhatsAppDeliveryFailed(orgId, waId, msg.getErrorMessage()));
+            }
         });
 
         contactRepo.findFirstByWaMessageIdAndOrganizationId(waId, orgId).ifPresent(cc -> {

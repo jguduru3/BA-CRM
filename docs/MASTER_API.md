@@ -314,3 +314,54 @@ def bettercrm():
 5. Register a webhook instead of polling; verify signatures and de-duplicate on
    the delivery id.
 6. Log the `X-Request-Id` of every failed call.
+
+## 9. Idempotency keys
+
+Network failures leave a client unsure whether a write happened. Send an
+`Idempotency-Key` header on any `POST` or `PATCH` under `/api/**` (Master API
+and the normal API alike) and retry with the same key: the request is executed
+at most once. Semantics follow Stripe's v1 API and the IETF
+`draft-ietf-httpapi-idempotency-key-header`.
+
+```
+POST /api/master/v1/leads
+X-API-Key: bcrm_…
+Idempotency-Key: 5f0c7a3e-9a8e-4d0e-b5f4-2a3b1c9d7e11
+Content-Type: application/json
+
+{"name": "Acme Corp", "email": "ops@acme.example"}
+```
+
+| Situation | Response |
+|---|---|
+| First request with the key | Executes normally; the status code and body are stored |
+| Retry, same key, same request | The stored response is replayed (same status and body) with `Idempotent-Replayed: true`; nothing runs again |
+| Same key, different request | `422 IDEMPOTENCY_KEY_REUSED` |
+| Retry while the first request is still running | `409 IDEMPOTENCY_IN_PROGRESS` with `Retry-After: 1`; retry shortly |
+| Malformed key (empty, over 255 characters, non-printable, more than one header) | `400 IDEMPOTENCY_KEY_INVALID` |
+
+Rules:
+
+- **Key format:** 1–255 printable ASCII characters. Use a V4 UUID or a
+  similarly random value, and never put personal data in it. A quoted
+  structured-header string (`"…"`) is also accepted.
+- **Scope:** keys belong to the credential: the API key, or the user for JWT
+  sessions. Two API keys can use the same key value independently.
+- **"Same request"** means the same method, path, query string and body bytes
+  (a SHA-256 hash is compared). Send byte-identical bodies on retry.
+- **Stored results:** once the request has started executing, its result is
+  stored and replayed, including `5xx` errors. Results meaning "never executed"
+  are **not** stored, and the key is released for a corrected retry:
+  `400` (validation), `401`, `403`, `422` and `429`. Requests rejected before
+  they reach the API (bad or missing credentials, rate limits) never touch the
+  key store.
+- **Lifetime:** keys are kept for 24 hours, then pruned. An expired key counts
+  as new.
+- **Batch:** a `POST /api/master/v1/batch` with a key is idempotent as a whole.
+  A retry replays the whole batch result. The operations inside it are not keyed
+  individually.
+- **Not supported:** `multipart/form-data` and form-encoded bodies go through
+  without idempotency. Other bodies over 10 MB are refused with
+  `413 IDEMPOTENCY_BODY_TOO_LARGE` when they carry a key. Responses that are not text, or that are larger than 1 MB, are not stored, so
+  retrying them runs the request again. `GET`, `PUT` and `DELETE` ignore the
+  header, because they are already idempotent by definition.
