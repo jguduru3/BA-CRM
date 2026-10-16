@@ -4,6 +4,9 @@ import com.betteranalytics.crm.core.CompanyDeletionService;
 import com.betteranalytics.crm.core.ListParams;
 import com.betteranalytics.crm.core.Patch;
 import com.betteranalytics.crm.core.Specs;
+import com.betteranalytics.crm.dedupe.DuplicateGuard;
+import com.betteranalytics.crm.dedupe.ObjectType;
+import com.betteranalytics.crm.dedupe.Probe;
 import com.betteranalytics.crm.entity.Company;
 import com.betteranalytics.crm.entity.Role;
 import com.betteranalytics.crm.entity.User;
@@ -43,16 +46,19 @@ public class CompanyController {
     private final PermissionService permissionService;
     private final TenantGuard tenantGuard;
     private final CompanyDeletionService deletion;
+    private final DuplicateGuard duplicateGuard;
 
     public CompanyController(CompanyRepository companyRepository, CurrentUser currentUser,
                              AuditService auditService, PermissionService permissionService,
-                             TenantGuard tenantGuard, CompanyDeletionService deletion) {
+                             TenantGuard tenantGuard, CompanyDeletionService deletion,
+                             DuplicateGuard duplicateGuard) {
         this.companyRepository = companyRepository;
         this.currentUser = currentUser;
         this.auditService = auditService;
         this.permissionService = permissionService;
         this.tenantGuard = tenantGuard;
         this.deletion = deletion;
+        this.duplicateGuard = duplicateGuard;
     }
 
     @GetMapping
@@ -95,11 +101,13 @@ public class CompanyController {
         Company company = new Company();
         apply(company, p);
         company.setOrganizationId(currentUser.organizationId());
+        DuplicateGuard.Outcome duplicates = duplicateGuard.checkCreate(actor, ObjectType.COMPANY, Probe.of(company));
         company.setOwnerId(ownerId != null ? ownerId : actor.getId());
         company.setCreatedAt(Instant.now());
         company.setUpdatedAt(Instant.now());
         companyRepository.save(company);
         auditService.log("create", "companies", company.getId(), company.getName(), null, company);
+        duplicateGuard.afterSave(duplicates, company.getId(), company.getName());
         return ResponseEntity.status(201).body(company);
     }
 
@@ -119,9 +127,12 @@ public class CompanyController {
         Company before = snapshot(existing);
         apply(existing, p);
         if (newOwner != null) existing.setOwnerId(newOwner);
+        DuplicateGuard.Outcome duplicates =
+                duplicateGuard.checkEdit(actor, ObjectType.COMPANY, Probe.of(before), Probe.of(existing));
         existing.setUpdatedAt(Instant.now());
         companyRepository.save(existing);
         auditService.log("update", "companies", id, existing.getName(), before, existing);
+        duplicateGuard.afterSave(duplicates, id, existing.getName());
         return ResponseEntity.ok(existing);
     }
 

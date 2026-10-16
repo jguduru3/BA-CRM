@@ -1,5 +1,7 @@
 package com.betteranalytics.crm.entity;
 
+import com.betteranalytics.crm.dedupe.MatchKeys;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import org.hibernate.annotations.SQLRestriction;
 import lombok.Getter;
@@ -85,4 +87,32 @@ public class Contact {
 
     @Column(name = "nature_of_business", length = 150)
     private String natureOfBusiness;
+
+    // ── V65 — normalized duplicate-match keys, maintained by dedupe.MatchKeys on
+    // every insert/update. Internal only: never serialized (they would bypass
+    // contact-info masking).
+    @JsonIgnore @Column(name = "email_normalized")
+    private String emailNormalized;
+
+    @JsonIgnore @Column(name = "phone_normalized", length = 32)
+    private String phoneNormalized;
+
+    @JsonIgnore @Column(name = "domain_normalized")
+    private String domainNormalized;
+
+    @JsonIgnore @Column(name = "name_key")
+    private String nameKey;
+
+    @JsonIgnore @Column(name = "name_phonetic", length = 16)
+    private String namePhonetic;
+
+    // V65 — comma-separated ids of the records merged into this one (merge is irreversible).
+    @Column(name = "merged_ids", columnDefinition = "TEXT")
+    private String mergedIds;
+
+    @PrePersist
+    @PreUpdate
+    void refreshMatchKeys() {
+        MatchKeys.refresh(this);
+    }
 }

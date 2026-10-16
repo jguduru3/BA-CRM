@@ -6,6 +6,10 @@ import com.betteranalytics.crm.core.ListParams;
 import com.betteranalytics.crm.core.Patch;
 import com.betteranalytics.crm.core.PipelineSettingsService;
 import com.betteranalytics.crm.core.Specs;
+import com.betteranalytics.crm.dedupe.DuplicateGuard;
+import com.betteranalytics.crm.dedupe.ObjectType;
+import com.betteranalytics.crm.dedupe.Probe;
+import com.betteranalytics.crm.routing.RoutingService;
 import com.betteranalytics.crm.dto.PipelineResponse;
 import com.betteranalytics.crm.entity.Lead;
 import com.betteranalytics.crm.entity.Role;
@@ -62,11 +66,14 @@ public class LeadController {
     private final CrmMasks              masks;
     private final LeadWorkflowService   workflow;
     private final PipelineSettingsService pipelineSettings;
+    private final DuplicateGuard        duplicateGuard;
+    private final RoutingService        routing;
 
     public LeadController(LeadRepository leadRepository, CurrentUser currentUser, AuditService auditService,
                           PermissionService permissionService, NotificationService notificationService,
                           AiAutomationService aiAutomationService, TenantGuard tenantGuard, CrmMasks masks,
-                          LeadWorkflowService workflow, PipelineSettingsService pipelineSettings) {
+                          LeadWorkflowService workflow, PipelineSettingsService pipelineSettings,
+                          DuplicateGuard duplicateGuard, RoutingService routing) {
         this.leadRepository      = leadRepository;
         this.currentUser         = currentUser;
         this.auditService        = auditService;
@@ -77,6 +84,8 @@ public class LeadController {
         this.masks               = masks;
         this.workflow            = workflow;
         this.pipelineSettings    = pipelineSettings;
+        this.duplicateGuard      = duplicateGuard;
+        this.routing             = routing;
     }
 
     /**
@@ -142,13 +151,29 @@ public class LeadController {
             if (score != null) lead.setLeadScore(score);
         }
         lead.setOrganizationId(currentUser.organizationId());
-        lead.setOwnerId(ownerId != null ? ownerId : actor.getId());
+        // Duplicate rules first: a rejected lead must not consume a routing turn.
+        DuplicateGuard.Outcome duplicates = duplicateGuard.checkCreate(actor, ObjectType.LEAD, Probe.of(lead));
+        // Round-robin routing: unowned leads from the API, or from a Manager+ who left the owner empty.
+        User routedTo = ownerId == null && routing.applies(actor)
+                ? routing.nextAssignee(lead.getOrganizationId(), lead.getGeography()).orElse(null)
+                : null;
+        lead.setOwnerId(ownerId != null ? ownerId : routedTo != null ? routedTo.getId() : actor.getId());
         lead.setFollowUpRescheduleCount(0);
         lead.setCreatedAt(Instant.now());
         lead.setUpdatedAt(Instant.now());
         leadRepository.save(lead);
         auditService.log("create", "leads", lead.getId(), lead.getName(), null, lead);
-        if (!lead.getOwnerId().equals(actor.getId())) {
+        duplicateGuard.afterSave(duplicates, lead.getId(), lead.getName());
+        if (routedTo != null) {
+            Map<String, Object> assigned = new LinkedHashMap<>();
+            assigned.put("ownerId", routedTo.getId());
+            assigned.put("ownerName", routedTo.getName());
+            assigned.put("rule", "round_robin");
+            auditService.log("auto_assign", "leads", lead.getId(), lead.getName(), Map.of("ownerId", "unassigned"), assigned);
+            notificationService.notify(actor.getOrganizationId(), routedTo.getId(),
+                    "lead_assigned", "New lead assigned to you: " + lead.getName(),
+                    "Auto-assigned by round-robin lead routing", "Lead", lead.getId());
+        } else if (!lead.getOwnerId().equals(actor.getId())) {
             notificationService.notify(actor.getOrganizationId(), lead.getOwnerId(),
                     "lead_assigned", "Lead assigned to you: " + lead.getName(),
                     "Assigned by " + actor.getName(), "Lead", lead.getId());
@@ -204,12 +229,15 @@ public class LeadController {
         }
 
         Lead before = snapshot(existing);
+        Probe keysBefore = Probe.of(existing);
         Long previousOwnerId = existing.getOwnerId();
         String previousStage = existing.getStage();
         Instant previousFollowUp = existing.getFollowUpAt();
 
         apply(existing, p, actor, false);
         if (p.has("ownerId")) existing.setOwnerId(p.lng("ownerId"));
+        DuplicateGuard.Outcome duplicates =
+                duplicateGuard.checkEdit(actor, ObjectType.LEAD, keysBefore, Probe.of(existing));
 
         if (!Objects.equals(previousFollowUp, existing.getFollowUpAt())) {
             // Only a change of an already-set date counts as a reschedule (spec §4).
@@ -222,6 +250,7 @@ public class LeadController {
         existing.setUpdatedAt(Instant.now());
         leadRepository.saveAndFlush(existing);
         auditService.log("update", "leads", existing.getId(), existing.getName(), before, existing);
+        duplicateGuard.afterSave(duplicates, existing.getId(), existing.getName());
 
         if (existing.getStage() != null && !existing.getStage().equals(previousStage)) {
             aiAutomationService.fireEvent(existing.getOrganizationId(), "on_stage_change", leadContext(existing));
