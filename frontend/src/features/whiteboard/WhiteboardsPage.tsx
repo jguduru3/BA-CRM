@@ -3,12 +3,14 @@ import { LayoutDashboard, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
+import { isManagerUp, isReadOnly, useAuthStore } from "@/lib/auth";
 import { formatRelative } from "@/lib/format";
 import { toast } from "@/lib/toast";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Field } from "@/components/ui/Field";
 import { Modal } from "@/components/ui/Modal";
+import { QueryError } from "@/components/ui/QueryError";
 import { SkeletonCards } from "@/components/ui/Skeleton";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
 
@@ -16,6 +18,8 @@ interface Board {
   id: number;
   name: string;
   description: string | null;
+  createdBy: number | null;
+  itemCount?: number;
   updatedAt: string;
 }
 
@@ -32,6 +36,9 @@ export default function WhiteboardsPage() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const { confirm, node: confirmNode } = useConfirm();
+  const me = useAuthStore((s) => s.user);
+  const readOnly = isReadOnly(me?.role);
+  const canDelete = (b: Board) => !readOnly && (isManagerUp(me?.role) || b.createdBy === me?.id);
 
   const list = useQuery({
     queryKey: ["whiteboards"],
@@ -56,6 +63,7 @@ export default function WhiteboardsPage() {
       toast.success("Board deleted");
       qc.invalidateQueries({ queryKey: ["whiteboards"] });
     },
+    onError: (e: Error) => toast.error(e.message),
   });
 
   return (
@@ -65,13 +73,19 @@ export default function WhiteboardsPage() {
         description="A freeform canvas for planning and brainstorming — sticky notes, text, shapes and images."
         icon={<LayoutDashboard size={20} />}
         actions={
-          <button className="btn-primary" onClick={() => setCreating(true)}>
-            <Plus size={15} /> New board
-          </button>
+          !readOnly && (
+            <button className="btn-primary" onClick={() => setCreating(true)}>
+              <Plus size={15} /> New board
+            </button>
+          )
         }
       />
 
-      {list.isLoading ? (
+      {list.isError ? (
+        <div className="glass-card">
+          <QueryError error={list.error} onRetry={() => list.refetch()} title="Couldn't load whiteboards" />
+        </div>
+      ) : list.isLoading ? (
         <SkeletonCards count={4} />
       ) : (list.data ?? []).length === 0 ? (
         <div className="glass-card">
@@ -87,11 +101,13 @@ export default function WhiteboardsPage() {
                   {b.name}
                 </p>
                 <p className="text-xs mt-1" style={{ color: "var(--ink-muted)" }}>
-                  Updated {formatRelative(b.updatedAt)}
+                  {b.itemCount != null ? `${b.itemCount} element${b.itemCount === 1 ? "" : "s"} · ` : ""}Updated {formatRelative(b.updatedAt)}
                 </p>
               </div>
+              {canDelete(b) && (
               <button
-                className="btn-icon absolute top-2 right-2 opacity-0 group-hover:opacity-100 bg-black/20 text-white hover:bg-black/40"
+                aria-label={`Delete ${b.name}`}
+                className="btn-icon absolute top-2 right-2 sm:opacity-0 sm:group-hover:opacity-100 bg-black/20 text-white hover:bg-black/40"
                 onClick={async (e) => {
                   e.stopPropagation();
                   const ok = await confirm("Delete this board?", `"${b.name}" and everything on it will be removed.`);
@@ -100,6 +116,7 @@ export default function WhiteboardsPage() {
               >
                 <Trash2 size={14} />
               </button>
+              )}
             </div>
           ))}
         </div>
