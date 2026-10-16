@@ -21,6 +21,8 @@ import { SearchInput } from "@/components/ui/SearchInput";
 import { changedFields, ExportButton, FilterSelect, ListToolbar, saveErrorMessage } from "@/features/crm/ListParts";
 import { useServerList } from "@/features/crm/useServerList";
 import { CompanyDraft, CompanyForm, COMPANY_STATUSES } from "./CompanyForm";
+import { AttachmentList } from "@/components/ui/AttachmentList";
+import { RecordPagePanel } from "@/features/recordpages/RecordPagePanel";
 
 export default function CompaniesPage() {
   const [params, setParams] = useSearchParams();
@@ -262,6 +264,12 @@ export default function CompaniesPage() {
         }
       >
         <CompanyForm value={draft} onChange={(p) => setDraft((d) => ({ ...d, ...p }))} />
+        {selected && (
+          <div className="mt-5 pt-4 hairline border-t space-y-5">
+            <RecordPagePanel relatedType="Company" relatedId={selected.id} readOnly={readOnly} />
+            <AttachmentList relatedType="Company" relatedId={selected.id} />
+          </div>
+        )}
         <div className="flex items-center justify-end gap-2 mt-6 pt-4 hairline border-t">
           <button className="btn-ghost" onClick={closeDrawers}>
             Cancel

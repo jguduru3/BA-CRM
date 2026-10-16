@@ -24,6 +24,8 @@ import { useDebounced, useServerList } from "@/features/crm/useServerList";
 import { OppDraft, OpportunityForm, OPP_STAGES } from "./OpportunityForm";
 import { OpportunityKanbanCard } from "./OpportunityKanbanCard";
 import { PipelineSettingsModal, usePipelineSettings } from "./PipelineSettingsModal";
+import { AttachmentList } from "@/components/ui/AttachmentList";
+import { RecordPagePanel } from "@/features/recordpages/RecordPagePanel";
 
 const STAGE_ACCENTS: Record<string, string> = {
   Qualification: "#2a78d6",
@@ -409,6 +411,12 @@ export default function OpportunitiesPage() {
           stageDefault={stageDefault(draft.stage)}
           valueHidden={valueHidden}
         />
+        {selected && (
+          <div className="mt-5 pt-4 hairline border-t space-y-5">
+            <RecordPagePanel relatedType="Opportunity" relatedId={selected.id} readOnly={readOnly} />
+            <AttachmentList relatedType="Opportunity" relatedId={selected.id} />
+          </div>
+        )}
         <div className="flex items-center justify-end gap-2 mt-6 pt-4 hairline border-t">
           <button className="btn-ghost" onClick={closeDrawers}>
             Cancel

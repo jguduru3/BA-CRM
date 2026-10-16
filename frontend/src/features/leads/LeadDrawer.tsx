@@ -15,6 +15,7 @@ import { AttachmentList } from "@/components/ui/AttachmentList";
 import { LeadForm } from "./LeadForm";
 import type { LeadDraft } from "./LeadForm";
 import { AiAssistPanel } from "./AiAssistPanel";
+import { RecordPagePanel } from "@/features/recordpages/RecordPagePanel";
 
 export function LeadDrawer({
   lead,
@@ -211,7 +212,8 @@ export function LeadDrawer({
         {lead && <AiAssistPanel lead={lead} />}
         <LeadForm value={draft} onChange={(p) => setDraft((d) => ({ ...d, ...p }))} disableSourceEdit={disableSourceEdit} />
         {lead && (
-          <div className="mt-5 pt-4 hairline border-t">
+          <div className="mt-5 pt-4 hairline border-t space-y-5">
+            <RecordPagePanel relatedType="Lead" relatedId={lead.id} readOnly={readOnly} />
             <AttachmentList relatedType="Lead" relatedId={lead.id} />
           </div>
         )}

@@ -43,6 +43,8 @@ final class FeaturePermissionTable {
         rule(Scope.ORG, Action.VIEW, ResourceType.LEAD, Role.SUPER_ADMIN, Role.VP_SALES);
         rule(Scope.TEAM, Action.VIEW, ResourceType.LEAD, Role.MANAGER);
         rule(Scope.OWN, Action.VIEW, ResourceType.LEAD, Role.EXECUTIVE, Role.INSIDE_SALES, Role.FIELD_SALES);
+        // SUPPORT — read-only, org-wide (README role table); writes are blocked centrally in lookup().
+        rule(Scope.ORG, Action.VIEW, ResourceType.LEAD, Role.SUPPORT);
 
         rule(Scope.ORG, Action.EDIT, ResourceType.LEAD, Role.SUPER_ADMIN, Role.VP_SALES);
         rule(Scope.TEAM, Action.EDIT, ResourceType.LEAD, Role.MANAGER);
@@ -71,6 +73,7 @@ final class FeaturePermissionTable {
         rule(Scope.ORG, Action.VIEW, ResourceType.OPPORTUNITY, Role.SUPER_ADMIN, Role.VP_SALES);
         rule(Scope.TEAM, Action.VIEW, ResourceType.OPPORTUNITY, Role.MANAGER);
         rule(Scope.OWN, Action.VIEW, ResourceType.OPPORTUNITY, Role.EXECUTIVE, Role.FIELD_SALES);
+        rule(Scope.ORG, Action.VIEW, ResourceType.OPPORTUNITY, Role.SUPPORT);
         rule(Scope.ORG, Action.EDIT, ResourceType.OPPORTUNITY, Role.SUPER_ADMIN, Role.VP_SALES);
         rule(Scope.TEAM, Action.EDIT, ResourceType.OPPORTUNITY, Role.MANAGER);
         rule(Scope.OWN, Action.EDIT, ResourceType.OPPORTUNITY, Role.EXECUTIVE, Role.FIELD_SALES);
@@ -132,6 +135,7 @@ final class FeaturePermissionTable {
         rule(Scope.ORG, Action.VIEW, ResourceType.TASK, Role.SUPER_ADMIN, Role.VP_SALES);
         rule(Scope.TEAM, Action.VIEW, ResourceType.TASK, Role.MANAGER);
         rule(Scope.OWN, Action.VIEW, ResourceType.TASK, Role.EXECUTIVE, Role.INSIDE_SALES, Role.FIELD_SALES);
+        rule(Scope.ORG, Action.VIEW, ResourceType.TASK, Role.SUPPORT);
         rule(Scope.ORG, Action.EDIT, ResourceType.TASK, Role.SUPER_ADMIN, Role.VP_SALES);
         rule(Scope.TEAM, Action.EDIT, ResourceType.TASK, Role.MANAGER);
         rule(Scope.OWN, Action.EDIT, ResourceType.TASK, Role.EXECUTIVE, Role.INSIDE_SALES, Role.FIELD_SALES);

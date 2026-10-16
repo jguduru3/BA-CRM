@@ -139,11 +139,11 @@ class CrmAccessControlTest extends CrmTestSupport {
         deleteAs(support, "/api/tasks/" + taskId).andExpect(status().isForbidden());
         putAs(support, "/api/pipeline-settings", Map.of("bigDealThreshold", 1)).andExpect(status().isForbidden());
 
-        // leads / deals / tasks aren't in Support's feature set at all
-        getAs(support, "/api/leads").andExpect(status().isForbidden());
-        getAs(support, "/api/leads/" + leadId).andExpect(status().isForbidden());
-        getAs(support, "/api/opportunities/" + oppId).andExpect(status().isForbidden());
-        getAs(support, "/api/tasks").andExpect(status().isForbidden());
+        // Support is read-only org-wide (README role table): leads, deals and tasks are readable too.
+        assertThat(getJson(support, "/api/leads").path("count").asLong()).isEqualTo(1);
+        getAs(support, "/api/leads/" + leadId).andExpect(status().isOk());
+        getAs(support, "/api/opportunities/" + oppId).andExpect(status().isOk());
+        assertThat(getJson(support, "/api/tasks").path("count").asLong()).isEqualTo(1);
     }
 
     // ── field masks ─────────────────────────────────────────────────────────────

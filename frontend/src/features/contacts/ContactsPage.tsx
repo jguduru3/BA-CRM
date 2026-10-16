@@ -23,6 +23,8 @@ import { safeHref } from "@/components/ui/SafeLink";
 import { changedFields, ExportButton, FilterSelect, ListToolbar, saveErrorMessage } from "@/features/crm/ListParts";
 import { useServerList } from "@/features/crm/useServerList";
 import { ContactDraft, ContactForm } from "./ContactForm";
+import { AttachmentList } from "@/components/ui/AttachmentList";
+import { RecordPagePanel } from "@/features/recordpages/RecordPagePanel";
 
 export default function ContactsPage() {
   const [params, setParams] = useSearchParams();
@@ -301,6 +303,12 @@ export default function ContactsPage() {
         }
       >
         <ContactForm value={draft} onChange={(p) => setDraft((d) => ({ ...d, ...p }))} />
+        {selected && (
+          <div className="mt-5 pt-4 hairline border-t space-y-5">
+            <RecordPagePanel relatedType="Contact" relatedId={selected.id} readOnly={readOnly} />
+            <AttachmentList relatedType="Contact" relatedId={selected.id} />
+          </div>
+        )}
         <div className="flex items-center justify-end gap-2 mt-6 pt-4 hairline border-t">
           <button className="btn-ghost" onClick={closeDrawers}>
             Cancel
