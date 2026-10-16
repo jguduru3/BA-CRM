@@ -57,13 +57,13 @@ export default function DashboardPage() {
         }
       />
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4">
         {stats.isError ? (
-          <div className="glass-card sm:col-span-2 xl:col-span-4">
+          <div className="glass-card col-span-2 xl:col-span-4">
             <QueryError error={stats.error} onRetry={() => stats.refetch()} title="Couldn't load your numbers" compact />
           </div>
         ) : stats.isLoading || !stats.data ? (
-          Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-[118px] rounded-2xl" />)
+          Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-[96px] sm:h-[118px] rounded-2xl" />)
         ) : (
           <>
             <StatTile
@@ -117,8 +117,12 @@ export default function DashboardPage() {
             </p>
           ) : (
             <HBarChart
-              data={pipeline.data.map((r) => ({ label: r.stage, value: r.value ?? r.count }))}
+              data={pipeline.data.map((r) => ({ label: r.stage, value: r.value ?? r.count, count: r.count }))}
               formatter={(v) => (pipeline.data![0]?.value == null ? String(v) : formatCompactCurrency(v))}
+              labelFormatter={(v, row) =>
+                pipeline.data![0]?.value == null ? `${v} deals` : `${formatCompactCurrency(v)} · ${row.count}`
+              }
+              emptyText="Every open deal is still at zero value."
             />
           )}
         </div>
@@ -151,7 +155,7 @@ export default function DashboardPage() {
           ) : funnel.isLoading || !funnel.data ? (
             <Skeleton className="h-48" />
           ) : (
-            <HBarChart data={funnel.data.map((r) => ({ label: r.stage, value: r.count }))} />
+            <HBarChart data={funnel.data.map((r) => ({ label: r.stage, value: r.count }))} emptyText="No leads yet." />
           )}
         </div>
 
