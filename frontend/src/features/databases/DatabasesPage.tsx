@@ -3,6 +3,8 @@ import { Database, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
+import { isReadOnly, useAuthStore } from "@/lib/auth";
+import { QueryError } from "@/components/ui/QueryError";
 import { ICON_PICKS, iconFor } from "@/lib/iconPicker";
 import { toast } from "@/lib/toast";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -28,6 +30,9 @@ export default function DatabasesPage() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const { confirm, node: confirmNode } = useConfirm();
+  const role = useAuthStore((s) => s.user?.role);
+  const readOnly = isReadOnly(role);
+  const canDelete = role === "SUPER_ADMIN" || role === "VP_SALES";
 
   const list = useQuery({
     queryKey: ["databases"],
@@ -61,13 +66,19 @@ export default function DatabasesPage() {
         description="Notion-style tables and boards with typed properties, built on your own schema."
         icon={<Database size={20} />}
         actions={
-          <button className="btn-primary" onClick={() => setCreating(true)}>
-            <Plus size={15} /> New database
-          </button>
+          !readOnly && (
+            <button className="btn-primary" onClick={() => setCreating(true)}>
+              <Plus size={15} /> New database
+            </button>
+          )
         }
       />
 
-      {list.isLoading ? (
+      {list.isError ? (
+        <div className="glass-card">
+          <QueryError error={list.error} onRetry={() => list.refetch()} title="Couldn't load databases" />
+        </div>
+      ) : list.isLoading ? (
         <SkeletonCards count={6} />
       ) : (list.data ?? []).length === 0 ? (
         <div className="glass-card">
@@ -88,17 +99,20 @@ export default function DatabasesPage() {
                     return <Icon size={18} strokeWidth={2} />;
                   })()}
                 </div>
+                {canDelete && (
                 <button
-                  className="btn-icon h-7 w-7 opacity-0 group-hover:opacity-100 pointer-events-auto"
+                  aria-label={`Delete ${db.name}`}
+                  className="btn-icon h-7 w-7 sm:opacity-0 sm:group-hover:opacity-100 pointer-events-auto"
                   style={{ color: "var(--critical)" }}
                   onClick={async (e) => {
                     e.stopPropagation();
-                    const ok = await confirm("Delete this database?", `"${db.name}"'s schema will be removed (records are kept in the DB but orphaned).`);
+                    const ok = await confirm("Delete this database?", `"${db.name}" and all of its properties, views and records will be deleted.`);
                     if (ok) remove.mutate(db.id);
                   }}
                 >
                   <Trash2 size={14} />
                 </button>
+                )}
               </div>
               <p className="mt-3 text-sm font-semibold relative pointer-events-none" style={{ color: "var(--ink-primary)" }}>
                 {db.name}

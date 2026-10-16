@@ -9,7 +9,11 @@ import org.springframework.data.repository.query.Param;
 import java.util.List;
 import java.util.Optional;
 
-public interface DatabaseRecordRepository extends JpaRepository<DatabaseRecord, Long> {
+public interface DatabaseRecordRepository extends JpaRepository<DatabaseRecord, Long>,
+        org.springframework.data.jpa.repository.JpaSpecificationExecutor<DatabaseRecord> {
+    /** Live records among the given ids, in one query (relation targets, chip titles). */
+    List<DatabaseRecord> findByIdInAndOrganizationId(java.util.Collection<Long> ids, Long organizationId);
+
     List<DatabaseRecord> findByDatabaseIdAndOrganizationId(Long databaseId, Long organizationId);
     List<DatabaseRecord> findByDatabaseIdAndOrganizationId(Long databaseId, Long organizationId, Pageable pageable);
     Optional<DatabaseRecord> findByIdAndOrganizationId(Long id, Long organizationId);

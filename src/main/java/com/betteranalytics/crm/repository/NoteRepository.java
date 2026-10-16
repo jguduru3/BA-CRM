@@ -8,7 +8,7 @@ import org.springframework.data.repository.query.Param;
 import java.util.List;
 import java.util.Optional;
 
-public interface NoteRepository extends JpaRepository<Note, Long> {
+public interface NoteRepository extends JpaRepository<Note, Long>, org.springframework.data.jpa.repository.JpaSpecificationExecutor<Note> {
     List<Note> findByOrganizationIdOrderByCreatedAtDesc(Long organizationId);
     List<Note> findByOrganizationIdOrderByCreatedAtDesc(Long organizationId, Pageable pageable);
     List<Note> findByOrganizationIdAndRelatedTypeAndRelatedIdOrderByPinnedDescCreatedAtDesc(

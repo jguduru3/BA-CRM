@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { File, FileImage, Paperclip, Trash2, Upload } from "lucide-react";
 import { useRef } from "react";
-import { api } from "@/lib/api";
+import { api, downloadFile } from "@/lib/api";
+import { isReadOnly, useAuthStore } from "@/lib/auth";
 import { formatRelative } from "@/lib/format";
 import { toast } from "@/lib/toast";
+import { QueryError } from "./QueryError";
 
 export interface AttachmentRow {
   id: number;
@@ -24,9 +26,23 @@ function formatSize(bytes: number): string {
  * CRM or workspace record via the generic POST/GET/DELETE /api/attachments
  * endpoints. Used by Documents, Database records, and can be dropped into
  * any detail drawer (Lead, Opportunity, Contact, Company...).
+ *
+ * Downloads go through the authenticated `downloadFile` helper (a plain href
+ * would not carry the bearer token). Upload/delete are hidden when `readOnly`
+ * is set or for read-only roles.
  */
-export function AttachmentList({ relatedType, relatedId }: { relatedType: string; relatedId: number }) {
+export function AttachmentList({
+  relatedType,
+  relatedId,
+  readOnly = false,
+}: {
+  relatedType: string;
+  relatedId: number;
+  readOnly?: boolean;
+}) {
   const qc = useQueryClient();
+  const role = useAuthStore((s) => s.user?.role);
+  const canWrite = !readOnly && !isReadOnly(role);
   const inputRef = useRef<HTMLInputElement>(null);
   const queryKey = ["attachments", relatedType, relatedId];
 
@@ -60,23 +76,30 @@ export function AttachmentList({ relatedType, relatedId }: { relatedType: string
   });
 
   const onFiles = (files: FileList | null) => {
-    if (!files) return;
+    if (!files || !canWrite) return;
     Array.from(files).forEach((f) => upload.mutate(f));
   };
+
+  const download = (a: AttachmentRow) =>
+    downloadFile(`/attachments/${a.id}/download`, a.fileName).catch((e: Error) => toast.error(e.message));
 
   return (
     <div>
       <div className="flex items-center justify-between mb-2">
         <p className="field-label mb-0">Files &amp; images</p>
-        <button className="btn-secondary px-2.5 py-1 text-xs" onClick={() => inputRef.current?.click()} disabled={upload.isPending}>
-          <Upload size={12} /> {upload.isPending ? "Uploading…" : "Upload"}
-        </button>
-        <input ref={inputRef} type="file" multiple hidden onChange={(e) => onFiles(e.target.files)} />
+        {canWrite && (
+          <>
+            <button className="btn-secondary px-2.5 py-1 text-xs" onClick={() => inputRef.current?.click()} disabled={upload.isPending}>
+              <Upload size={12} /> {upload.isPending ? "Uploading…" : "Upload"}
+            </button>
+            <input ref={inputRef} type="file" multiple hidden onChange={(e) => onFiles(e.target.files)} />
+          </>
+        )}
       </div>
       <div
         className="rounded-xl border border-dashed p-3 space-y-1.5"
         style={{ borderColor: "rgb(var(--panel-border) / 0.16)" }}
-        onDragOver={(e) => e.preventDefault()}
+        onDragOver={(e) => canWrite && e.preventDefault()}
         onDrop={(e) => {
           e.preventDefault();
           onFiles(e.dataTransfer.files);
@@ -86,11 +109,13 @@ export function AttachmentList({ relatedType, relatedId }: { relatedType: string
           <p className="text-xs text-center py-3" style={{ color: "var(--ink-muted)" }}>
             Loading…
           </p>
+        ) : list.isError ? (
+          <QueryError error={list.error} onRetry={() => list.refetch()} title="Couldn't load files" compact />
         ) : (list.data ?? []).length === 0 ? (
           <div className="flex flex-col items-center py-4 text-center">
             <Paperclip size={18} style={{ color: "var(--ink-muted)" }} />
             <p className="text-xs mt-1.5" style={{ color: "var(--ink-muted)" }}>
-              Drag files here or click Upload
+              {canWrite ? "Drag files here or click Upload" : "No files yet"}
             </p>
           </div>
         ) : (
@@ -99,25 +124,28 @@ export function AttachmentList({ relatedType, relatedId }: { relatedType: string
             return (
               <div key={a.id} className="flex items-center gap-2.5 py-1.5 px-2 rounded-lg group hover:bg-[rgb(var(--panel-border)/0.05)]">
                 {isImage ? <FileImage size={15} style={{ color: "var(--brand-500)" }} /> : <File size={15} style={{ color: "var(--ink-muted)" }} />}
-                <a
-                  href={`/api/attachments/${a.id}/download`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="flex-1 min-w-0 text-sm truncate hover:underline"
+                <button
+                  type="button"
+                  onClick={() => download(a)}
+                  className="flex-1 min-w-0 text-left text-sm truncate hover:underline"
                   style={{ color: "var(--ink-primary)" }}
+                  title={`Download ${a.fileName}`}
                 >
                   {a.fileName}
-                </a>
-                <span className="text-[11px] shrink-0" style={{ color: "var(--ink-muted)" }}>
+                </button>
+                <span className="text-[11px] shrink-0 hidden sm:inline" style={{ color: "var(--ink-muted)" }}>
                   {formatSize(a.sizeBytes)} · {formatRelative(a.createdAt)}
                 </span>
-                <button
-                  className="btn-icon h-6 w-6 opacity-0 group-hover:opacity-100 shrink-0"
-                  style={{ color: "var(--critical)" }}
-                  onClick={() => remove.mutate(a.id)}
-                >
-                  <Trash2 size={12} />
-                </button>
+                {canWrite && (
+                  <button
+                    className="btn-icon h-6 w-6 sm:opacity-0 sm:group-hover:opacity-100 shrink-0"
+                    style={{ color: "var(--critical)" }}
+                    aria-label={`Remove ${a.fileName}`}
+                    onClick={() => remove.mutate(a.id)}
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                )}
               </div>
             );
           })

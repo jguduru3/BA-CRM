@@ -1,6 +1,7 @@
 package com.betteranalytics.crm.repository;
 
 import com.betteranalytics.crm.entity.TodoList;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -11,6 +12,11 @@ public interface TodoListRepository extends JpaRepository<TodoList, Long> {
     @Query("SELECT l FROM TodoList l WHERE l.organizationId = :orgId " +
            "AND (l.ownerId = :userId OR l.isShared = true) ORDER BY l.position ASC, l.createdAt DESC")
     List<TodoList> findVisibleByOrgAndUser(@Param("orgId") Long orgId, @Param("userId") Long userId);
+
+    /** Same visibility rule, paged in the database. */
+    @Query("SELECT l FROM TodoList l WHERE l.organizationId = :orgId " +
+           "AND (l.ownerId = :userId OR l.isShared = true) ORDER BY l.position ASC, l.createdAt DESC, l.id DESC")
+    List<TodoList> findVisibleByOrgAndUser(@Param("orgId") Long orgId, @Param("userId") Long userId, Pageable page);
 
     Optional<TodoList> findByIdAndOrganizationId(Long id, Long orgId);
 }
