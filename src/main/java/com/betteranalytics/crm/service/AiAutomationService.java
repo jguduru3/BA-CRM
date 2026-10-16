@@ -5,10 +5,16 @@ import com.betteranalytics.crm.config.IntegrationAsyncConfig.IntegrationExecutor
 import com.betteranalytics.crm.entity.AiAutomation;
 import com.betteranalytics.crm.entity.AiAutomationRun;
 import com.betteranalytics.crm.entity.EmailAccount;
+import com.betteranalytics.crm.entity.Note;
 import com.betteranalytics.crm.entity.OrgSettings;
 import com.betteranalytics.crm.repository.AiAutomationRepository;
 import com.betteranalytics.crm.repository.AiAutomationRunRepository;
+import com.betteranalytics.crm.repository.CompanyRepository;
+import com.betteranalytics.crm.repository.ContactRepository;
 import com.betteranalytics.crm.repository.EmailAccountRepository;
+import com.betteranalytics.crm.repository.LeadRepository;
+import com.betteranalytics.crm.repository.NoteRepository;
+import com.betteranalytics.crm.repository.OpportunityRepository;
 import com.betteranalytics.crm.repository.OrgSettingsRepository;
 import com.betteranalytics.crm.security.UrlSafety;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -72,6 +78,13 @@ import java.util.regex.*;
  *       "headersJson": "{\"Authorization\":\"Bearer {{token}}\"}",
  *       "bodyTemplate": "{\"input\":\"{{input}}\"}" }
  *
+ * Saving to the record (generate_content / prepare_strategy / analyze_data):
+ *   "saveToRecord": true|false — when the run's context names a record (lead.id,
+ *   contact.id, opportunity.id or company.id — every record event does), the output
+ *   is appended as a Note "AI: <automation name>" on that record, authored by the
+ *   automation's creator, after the triggering transaction commits. Default: true
+ *   whenever such a record is in the context.
+ *
  * custom_api / send_email / read_email are privileged (SUPER_ADMIN / VP_SALES
  * only to create or modify — enforced in AiAutomationController).
  */
@@ -101,6 +114,12 @@ public class AiAutomationService {
             "generate_content", "prepare_strategy", "analyze_data", "send_email", "read_email", "custom_api");
     public static final Set<String> PRIVILEGED_ACTION_TYPES = Set.of("custom_api", "send_email", "read_email");
     public static final Set<String> PROVIDERS = Set.of("anthropic", "openai");
+    /** Action types whose output is AI-generated text that can be saved as a Note. */
+    public static final Set<String> NOTE_ACTION_TYPES = Set.of("generate_content", "prepare_strategy", "analyze_data");
+    /** Context keys that identify the record a run is about, in priority order. */
+    private static final List<String[]> RECORD_KEYS = List.of(
+            new String[]{"lead.id", "Lead"}, new String[]{"contact.id", "Contact"},
+            new String[]{"opportunity.id", "Opportunity"}, new String[]{"company.id", "Company"});
 
     private final AiAutomationRepository automationRepo;
     private final AiAutomationRunRepository runRepo;
@@ -111,13 +130,33 @@ public class AiAutomationService {
     private final ObjectMapper objectMapper;
     private final RestTemplate aiRestTemplate;
     private final RestTemplate customApiRestTemplate;
+    private final NoteRepository noteRepo;
+    private final LeadRepository leadRepo;
+    private final ContactRepository contactRepo;
+    private final OpportunityRepository opportunityRepo;
+    private final CompanyRepository companyRepo;
+    /** Own transaction for the note (an afterCommit callback must not join the finished one). */
+    private final org.springframework.transaction.support.TransactionTemplate txNew;
 
     public AiAutomationService(AiAutomationRepository automationRepo,
                                 AiAutomationRunRepository runRepo,
                                 EmailAccountRepository emailAccountRepo,
                                 OrgSettingsRepository orgSettingsRepo,
                                 EmailIntegrationService emailService,
-                                IntegrationExecutor executor) {
+                                IntegrationExecutor executor,
+                                NoteRepository noteRepo,
+                                LeadRepository leadRepo,
+                                ContactRepository contactRepo,
+                                OpportunityRepository opportunityRepo,
+                                CompanyRepository companyRepo,
+                                org.springframework.transaction.PlatformTransactionManager txManager) {
+        this.txNew = new org.springframework.transaction.support.TransactionTemplate(txManager);
+        this.txNew.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        this.noteRepo = noteRepo;
+        this.leadRepo = leadRepo;
+        this.contactRepo = contactRepo;
+        this.opportunityRepo = opportunityRepo;
+        this.companyRepo = companyRepo;
         this.automationRepo = automationRepo;
         this.runRepo = runRepo;
         this.emailAccountRepo = emailAccountRepo;
@@ -426,6 +465,7 @@ public class AiAutomationService {
             Map<String, Object> result = execute(automation, ctx);
             run.setOutputText(result.get("output") instanceof String s ? s : null);
             run.setStatus("completed");
+            result = saveOutputToRecord(automation, ctx, run.getOutputText(), result);
             try { run.setActionResultJson(objectMapper.writeValueAsString(result)); } catch (Exception ignored) {}
             run.setTokensUsed(result.get("tokens") instanceof Number n ? n.intValue() : null);
         } catch (Exception e) {
@@ -439,6 +479,88 @@ public class AiAutomationService {
 
         automationRepo.recordRun(automationId, Instant.now());
         return run;
+    }
+
+    /** The record a run's context is about: [relatedType, id], or null. */
+    static Object[] recordRef(Map<String, String> ctx) {
+        for (String[] k : RECORD_KEYS) {
+            String v = ctx.get(k[0]);
+            if (v == null || v.isBlank()) continue;
+            try {
+                return new Object[]{k[1], Long.parseLong(v.trim())};
+            } catch (NumberFormatException ignored) {
+                // not an id: try the next key
+            }
+        }
+        return null;
+    }
+
+    /** saveToRecord: explicit boolean wins; absent → true (only effective when the context names a record). */
+    static boolean saveToRecord(Map<String, Object> config) {
+        Object v = config.get("saveToRecord");
+        if (v instanceof Boolean b) return b;
+        if (v instanceof String s && !s.isBlank()) return !"false".equalsIgnoreCase(s.trim());
+        return true;
+    }
+
+    /**
+     * Appends the generated output as a Note on the context's record (see class doc).
+     * Runs after the caller's transaction commits when one is active; otherwise now,
+     * and the note id is added to the run result. A failure here never fails the run.
+     */
+    private Map<String, Object> saveOutputToRecord(AiAutomation automation, Map<String, String> ctx, String output,
+                                                   Map<String, Object> result) {
+        if (output == null || output.isBlank() || !NOTE_ACTION_TYPES.contains(automation.getActionType())) return result;
+        Object[] ref = recordRef(ctx);
+        if (ref == null || !saveToRecord(parseJson(automation.getActionConfigJson()))) return result;
+        String type = (String) ref[0];
+        Long id = (Long) ref[1];
+        Long org = automation.getOrganizationId();
+        Map<String, Object> out = new LinkedHashMap<>(result);
+        out.put("savedTo", type + ":" + id);
+        Runnable save = () -> {
+            try {
+                if (!recordExists(type, id, org)) {
+                    log.warn("Automation {}: {} {} not found in org {}; output not saved as a note", automation.getId(), type, id, org);
+                    out.remove("savedTo");
+                    return;
+                }
+                Note n = new Note();
+                n.setOrganizationId(org);
+                String title = "AI: " + automation.getName();
+                n.setTitle(title.length() > 300 ? title.substring(0, 300) : title);
+                n.setBody(output);
+                n.setRelatedType(type);
+                n.setRelatedId(id);
+                n.setCreatedBy(automation.getCreatedBy());
+                Instant now = Instant.now();
+                n.setCreatedAt(now);
+                n.setUpdatedAt(now);
+                Note saved = txNew.execute(st -> noteRepo.save(n));
+                if (saved != null) out.put("noteId", saved.getId());
+            } catch (Exception e) {
+                log.warn("Automation {} output could not be saved as a note: {}", automation.getId(), e.toString());
+                out.remove("savedTo");
+            }
+        };
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override public void afterCommit() { save.run(); }
+            });
+        } else {
+            save.run();
+        }
+        return out;
+    }
+
+    private boolean recordExists(String type, Long id, Long org) {
+        return switch (type) {
+            case "Lead" -> leadRepo.findByIdAndOrganizationId(id, org).isPresent();
+            case "Contact" -> contactRepo.findByIdAndOrganizationId(id, org).isPresent();
+            case "Opportunity" -> opportunityRepo.findByIdAndOrganizationId(id, org).isPresent();
+            case "Company" -> companyRepo.findByIdAndOrganizationId(id, org).isPresent();
+            default -> false;
+        };
     }
 
     /** Only messages we authored reach the client; anything else becomes a generic message. */
