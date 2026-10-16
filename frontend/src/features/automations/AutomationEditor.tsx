@@ -32,6 +32,8 @@ export interface EditorState {
 }
 
 const AI_ACTIONS: ActionType[] = ["generate_content", "prepare_strategy", "analyze_data", "send_email"];
+/** Actions whose AI output can be saved as a note on the record (AiAutomationService.NOTE_ACTION_TYPES). */
+const NOTE_ACTIONS: ActionType[] = ["generate_content", "prepare_strategy", "analyze_data"];
 
 export function AutomationEditor({
   value,
@@ -259,6 +261,23 @@ export function AutomationEditor({
               <Field label="Max tokens" hint="1–8000">
                 <input className="input" type="number" min={1} max={8000} value={num("maxTokens")} placeholder="2000" onChange={(e) => setCfg({ maxTokens: e.target.value ? Number(e.target.value) : undefined })} />
               </Field>
+            )}
+            {NOTE_ACTIONS.includes(value.actionType) && (
+              <label className="flex items-start gap-2.5 text-sm cursor-pointer select-none" style={{ color: "var(--ink-secondary)" }}>
+                <input
+                  type="checkbox"
+                  className="checkbox mt-0.5"
+                  checked={value.config.saveToRecord !== false}
+                  onChange={(e) => setCfg({ saveToRecord: e.target.checked })}
+                />
+                <span>
+                  Save the output as a note on the record
+                  <span className="block text-xs" style={{ color: "var(--ink-muted)" }}>
+                    When the run is about a lead, contact or deal (record triggers, or a run with lead.id / contact.id), the result is
+                    added to its notes as “AI: {value.name.trim() || "automation name"}”.
+                  </span>
+                </span>
+              </label>
             )}
           </>
         )}

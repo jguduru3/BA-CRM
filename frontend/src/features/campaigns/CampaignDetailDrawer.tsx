@@ -21,9 +21,11 @@ import {
   type CampaignDetail,
   type CampaignRecipient,
   canEditRecipients,
+  CHANNEL_LABEL,
   normalizeStatus,
   STATUS_LABEL,
   STATUS_TONE,
+  submitBlocker,
 } from "./campaignTypes";
 
 const ACTION_META: Record<Exclude<CampaignAction, "edit" | "delete">, { label: string; icon: LucideIcon; tone: string }> = {
@@ -134,7 +136,7 @@ export function CampaignDetailDrawer({ campaignId, onClose }: { campaignId: numb
         .split(/[\n,;]+/)
         .map((l) => l.trim())
         .filter(Boolean)
-        .map((phoneNumber) => ({ phoneNumber }));
+        .map((entry) => (detail.data?.campaign.type === "email" ? { email: entry } : { phoneNumber: entry }));
       return (await api.post<AddRecipientsResult>(`/campaigns/${campaignId}/contacts`, entries)).data;
     },
     onSuccess: (r) => {
@@ -174,7 +176,7 @@ export function CampaignDetailDrawer({ campaignId, onClose }: { campaignId: numb
       const scheduled = c.scheduledAt && new Date(c.scheduledAt).getTime() > Date.now();
       const ok = await confirm(
         status === "draft" ? "Launch without approval?" : "Launch this campaign?",
-        `${c.totalContacts} recipient${c.totalContacts === 1 ? "" : "s"} will be messaged${scheduled ? ` starting ${formatDateTime(c.scheduledAt)}` : " now"}. Opted-out numbers are skipped automatically.`,
+        `${c.totalContacts} recipient${c.totalContacts === 1 ? "" : "s"} will be messaged${scheduled ? ` starting ${formatDateTime(c.scheduledAt)}` : " now"}. Opted-out recipients are skipped automatically.`,
         false
       );
       if (ok) act.mutate({ key });
@@ -194,6 +196,9 @@ export function CampaignDetailDrawer({ campaignId, onClose }: { campaignId: numb
         templateLanguage: c.templateLanguage ?? "en_US",
         templateParams: c.templateParams ?? "",
         messageBody: c.messageBody ?? "",
+        emailAccountId: c.emailAccountId ?? null,
+        emailSubject: c.emailSubject ?? "",
+        emailBody: c.emailBody ?? "",
         scheduledAt: c.scheduledAt ?? null,
       });
       setEditing(true);
@@ -220,7 +225,7 @@ export function CampaignDetailDrawer({ campaignId, onClose }: { campaignId: numb
         c && (
           <span className="inline-flex items-center gap-2">
             <span className={STATUS_TONE[status]}>{STATUS_LABEL[status]}</span>
-            <span className="capitalize">{c.type}</span>
+            <span>{CHANNEL_LABEL[c.type] ?? c.type}</span>
             {status === "sending" && <span className="inline-flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full animate-pulse" style={{ backgroundColor: "var(--brand-500)" }} /> live</span>}
           </span>
         )
@@ -325,8 +330,8 @@ export function CampaignDetailDrawer({ campaignId, onClose }: { campaignId: numb
                       key={a}
                       className={m.tone}
                       style={a === "cancel" ? { color: "var(--critical)" } : undefined}
-                      disabled={busy || (a === "submit" && c.type === "whatsapp" && !c.templateName)}
-                      title={a === "submit" && c.type === "whatsapp" && !c.templateName ? "Add a template name first" : undefined}
+                      disabled={busy || ((a === "submit" || a === "launch") && !!submitBlocker(c))}
+                      title={(a === "submit" || a === "launch") ? (submitBlocker(c) ?? undefined) : undefined}
                       onClick={() => runAction(a)}
                     >
                       <m.icon size={14} /> {label}
@@ -348,17 +353,24 @@ export function CampaignDetailDrawer({ campaignId, onClose }: { campaignId: numb
                 <Meta label="Scheduled" value={c.scheduledAt ? formatDateTime(c.scheduledAt) : "On launch"} />
               </>
             )}
+            {c.type === "email" && (
+              <>
+                <Meta label="Subject" value={c.emailSubject || "—"} />
+                <Meta label="Scheduled" value={c.scheduledAt ? formatDateTime(c.scheduledAt) : "On launch"} />
+              </>
+            )}
+            {c.type === "sms" && <Meta label="Scheduled" value={c.scheduledAt ? formatDateTime(c.scheduledAt) : "On launch"} />}
             <Meta label="Created" value={formatDateTime(c.createdAt)} />
             {c.approvedAt && <Meta label="Approved" value={formatDateTime(c.approvedAt)} />}
             {c.startedAt && <Meta label="Started" value={formatDateTime(c.startedAt)} />}
             {c.completedAt && <Meta label={status === "cancelled" ? "Cancelled" : "Completed"} value={formatDateTime(c.completedAt)} />}
           </dl>
 
-          {c.messageBody && (
+          {(c.type === "email" ? c.emailBody : c.messageBody) && (
             <div>
-              <p className="field-label">Notes</p>
+              <p className="field-label">{c.type === "whatsapp" ? "Notes" : c.type === "sms" ? "SMS message" : "Email message"}</p>
               <p className="text-sm whitespace-pre-wrap p-3 rounded-xl glass-solid" style={{ color: "var(--ink-secondary)" }}>
-                {c.messageBody}
+                {c.type === "email" ? c.emailBody : c.messageBody}
               </p>
             </div>
           )}
@@ -368,6 +380,7 @@ export function CampaignDetailDrawer({ campaignId, onClose }: { campaignId: numb
               <AudienceBuilder
                 campaignId={c.id}
                 initialCriteria={c.audienceCriteriaJson}
+                field={c.type === "email" ? "email" : "phone"}
                 editable
                 onApplied={(r) => {
                   setLastAdd(r);
@@ -377,18 +390,20 @@ export function CampaignDetailDrawer({ campaignId, onClose }: { campaignId: numb
               />
               <div className="glass-solid rounded-xl p-4 space-y-2">
                 <p className="text-sm font-semibold" style={{ color: "var(--ink-primary)" }}>
-                  Add numbers manually
+                  {c.type === "email" ? "Add addresses manually" : "Add numbers manually"}
                 </p>
                 <textarea
                   className="textarea font-mono text-[13px]"
                   rows={4}
                   value={recipients}
                   onChange={(e) => setRecipients(e.target.value)}
-                  placeholder={"+919876543210\n+14155550123"}
+                  placeholder={c.type === "email" ? "asha@example.com\nravi@example.com" : "+919876543210\n+14155550123"}
                 />
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="text-xs" style={{ color: "var(--ink-muted)" }}>
-                    One per line, international format. Duplicates and invalid numbers are skipped.
+                    {c.type === "email"
+                      ? "One address per line. Duplicates and invalid addresses are skipped."
+                      : "One per line, international format. Duplicates and invalid numbers are skipped."}
                   </span>
                   <button className="btn-secondary" disabled={!recipients.trim() || addRecipients.isPending} onClick={() => addRecipients.mutate()}>
                     <Plus size={14} /> Add recipients
@@ -443,7 +458,7 @@ export function CampaignDetailDrawer({ campaignId, onClose }: { campaignId: numb
                     <li key={r.id} className="flex items-center gap-3 px-3 py-2 hairline border-b last:border-b-0 text-sm">
                       <div className="min-w-0 flex-1">
                         <p className="font-mono text-[13px] tabular-nums truncate" style={{ color: "var(--ink-primary)" }}>
-                          {r.normalizedPhone ?? r.phoneNumber}
+                          {c.type === "email" ? (r.emailNormalized ?? r.email ?? "—") : (r.normalizedPhone ?? r.phoneNumber ?? "—")}
                         </p>
                         {(r.name || r.failedReason) && (
                           <p className="text-[11px] truncate" style={{ color: r.failedReason ? "var(--critical)" : "var(--ink-muted)" }}>

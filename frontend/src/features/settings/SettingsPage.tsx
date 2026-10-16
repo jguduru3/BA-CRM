@@ -11,17 +11,20 @@ import { Avatar } from "@/components/ui/Avatar";
 import { Field, FieldGrid } from "@/components/ui/Field";
 import { Tabs } from "@/components/ui/Tabs";
 import { AiSettingsTab } from "./AiSettingsTab";
+import { EmailAccountsTab } from "./EmailAccountsTab";
 import { useSearchParams } from "react-router-dom";
 
 export default function SettingsPage() {
   const [params] = useSearchParams();
   const initialTab = params.get("tab");
-  const [tab, setTab] = useState<"profile" | "ai" | "organization">(
-    initialTab === "ai" || initialTab === "organization" ? initialTab : "profile"
+  const [tab, setTab] = useState<"profile" | "ai" | "email" | "organization">(
+    initialTab === "ai" || initialTab === "organization" || initialTab === "email" ? initialTab : "profile"
   );
   const user = useAuthStore((s) => s.user);
   const updateUser = useAuthStore((s) => s.updateUser);
   const isAdmin = user?.role === "SUPER_ADMIN";
+  // Mailboxes hold credentials: Super Admin and VP Sales (EMAIL_ACCOUNT permission).
+  const managesMail = isAdmin || user?.role === "VP_SALES";
   const qc = useQueryClient();
 
   // ── Profile ──────────────────────────────────────────────────────────────
@@ -90,7 +93,9 @@ export default function SettingsPage() {
         onChange={setTab}
         tabs={[
           { value: "profile", label: "Profile" },
-          ...(isAdmin ? [{ value: "ai" as const, label: "AI Assistant" }, { value: "organization" as const, label: "Organization" }] : []),
+          ...(isAdmin ? [{ value: "ai" as const, label: "AI Assistant" }] : []),
+          ...(managesMail ? [{ value: "email" as const, label: "Email accounts" }] : []),
+          ...(isAdmin ? [{ value: "organization" as const, label: "Organization" }] : []),
         ]}
       />
 
@@ -154,6 +159,8 @@ export default function SettingsPage() {
       )}
 
       {tab === "ai" && isAdmin && <AiSettingsTab />}
+
+      {tab === "email" && managesMail && <EmailAccountsTab canManage={managesMail} />}
 
       {tab === "organization" && isAdmin && (
         <div className="glass-card p-5 space-y-5">

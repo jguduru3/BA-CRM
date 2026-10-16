@@ -21,6 +21,9 @@ export interface CampaignRow {
   templateLanguage?: string | null;
   templateParams?: string | null;
   messageBody?: string | null;
+  emailAccountId?: number | null;
+  emailSubject?: string | null;
+  emailBody?: string | null;
   scheduledAt?: string | null;
   startedAt?: string | null;
   completedAt?: string | null;
@@ -59,8 +62,10 @@ export interface CampaignProgress {
 
 export interface CampaignRecipient {
   id: number;
-  phoneNumber: string;
+  phoneNumber: string | null;
   normalizedPhone?: string | null;
+  email?: string | null;
+  emailNormalized?: string | null;
   name?: string | null;
   status: string;
   relatedType?: string | null;
@@ -86,9 +91,12 @@ export interface AddRecipientsResult {
 }
 
 export interface AudiencePreview {
+  /** Which lead field the campaign's channel needs: "phone" (WhatsApp / SMS) or "email". */
+  channelField?: "phone" | "email";
   count: number;
   matching: number;
   withoutPhone: number;
+  withoutEmail?: number;
   truncated: boolean;
   recipients: {
     relatedType: string;
@@ -97,8 +105,84 @@ export interface AudiencePreview {
     phone: string | null;
     normalizedPhone: string | null;
     validPhone: boolean;
+    email?: string | null;
+    validEmail?: boolean;
     optedOut: boolean;
   }[];
+}
+
+export type CampaignType = CampaignRow["type"];
+
+export const CHANNEL_LABEL: Record<CampaignType, string> = {
+  whatsapp: "WhatsApp",
+  email: "Email",
+  sms: "SMS",
+};
+
+/** GET /campaigns/channels — which channels can send for this organization. */
+export interface ChannelStatus {
+  configured: boolean;
+  detail: string;
+  from?: string | null;
+}
+export interface CampaignChannels {
+  whatsapp: ChannelStatus;
+  email: ChannelStatus;
+  sms: ChannelStatus;
+  emailPerMinute?: number;
+}
+
+/** Template variables offered for email / SMS bodies (resolved per recipient on the server). */
+export const MESSAGE_VARIABLES = [
+  "{{contact.name}}",
+  "{{contact.firstName}}",
+  "{{contact.email}}",
+  "{{owner.name}}",
+  "{{campaign.name}}",
+  "{{lead.stage}}",
+] as const;
+
+/** GSM 03.38 basic + extension characters; anything else forces UCS-2 (70 chars per SMS). */
+const GSM_BASIC =
+  "@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà";
+const GSM_EXT = "^{}\\[~]|€\f";
+
+export interface SmsSegments {
+  chars: number;
+  segments: number;
+  unicode: boolean;
+  /** Characters available per segment for this encoding (single / multi-part). */
+  single: number;
+  multi: number;
+}
+
+/** SMS length: 160 GSM-7 chars in one message, 153 per part when longer (306 for two); 70 / 67 for Unicode. */
+export function smsSegments(text: string): SmsSegments {
+  let units = 0;
+  let unicode = false;
+  for (const ch of text) {
+    if (GSM_BASIC.includes(ch)) units += 1;
+    else if (GSM_EXT.includes(ch)) units += 2;
+    else {
+      unicode = true;
+      break;
+    }
+  }
+  if (unicode) {
+    const len = [...text].reduce((n, ch) => n + (ch.codePointAt(0)! > 0xffff ? 2 : 1), 0);
+    return { chars: len, segments: len === 0 ? 0 : len <= 70 ? 1 : Math.ceil(len / 67), unicode, single: 70, multi: 67 };
+  }
+  return { chars: units, segments: units === 0 ? 0 : units <= 160 ? 1 : Math.ceil(units / 153), unicode, single: 160, multi: 153 };
+}
+
+/** Why a campaign can't be submitted yet (mirrors the server's checks), or null. */
+export function submitBlocker(
+  c: Pick<CampaignRow, "type" | "templateName" | "emailSubject" | "emailBody" | "messageBody">
+): string | null {
+  if (c.type === "whatsapp" && !c.templateName?.trim()) return "Add a template name first";
+  if (c.type === "email" && (!c.emailSubject?.trim() || !c.emailBody?.trim())) return "Add a subject and a message first";
+  if (c.type === "sms" && !c.messageBody?.trim()) return "Write the SMS message first";
+  return null;
 }
 
 export interface AudienceFilter {

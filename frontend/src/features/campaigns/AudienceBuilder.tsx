@@ -52,12 +52,17 @@ export function AudienceBuilder({
   initialCriteria,
   editable,
   onApplied,
+  field = "phone",
 }: {
   campaignId: number;
   initialCriteria?: string | null;
   editable: boolean;
   onApplied: (r: AddRecipientsResult) => void;
+  /** Contact field the channel needs: phone (WhatsApp / SMS) or email. */
+  field?: "phone" | "email";
 }) {
+  const byEmail = field === "email";
+  const fieldLabel = byEmail ? "an email address" : "a phone number";
   const [filters, setFilters] = useState<AudienceFilter[]>(() => parseCriteria(initialCriteria));
   const [preview, setPreview] = useState<AudiencePreview | null>(null);
   const criteria = buildCriteria(filters);
@@ -93,7 +98,7 @@ export function AudienceBuilder({
 
       {filters.length === 0 && (
         <p className="text-xs" style={{ color: "var(--ink-muted)" }}>
-          No filters — every lead with a phone number matches. Add filters to narrow it down.
+          No filters — every lead with {fieldLabel} matches. Add filters to narrow it down.
         </p>
       )}
       <div className="space-y-2">
@@ -174,9 +179,11 @@ export function AudienceBuilder({
               <strong className="tabular-nums" style={{ color: "var(--ink-primary)" }}>
                 {preview.count.toLocaleString()}
               </strong>{" "}
-              leads with a phone number
+              leads with {fieldLabel}
             </span>
-            {preview.withoutPhone > 0 && <span>{preview.withoutPhone.toLocaleString()} more match but have no phone</span>}
+            {byEmail
+              ? (preview.withoutEmail ?? 0) > 0 && <span>{(preview.withoutEmail ?? 0).toLocaleString()} more match but have no email</span>
+              : preview.withoutPhone > 0 && <span>{preview.withoutPhone.toLocaleString()} more match but have no phone</span>}
           </div>
           {preview.recipients.length > 0 && (
             <div className="max-h-56 overflow-y-auto thin-scroll rounded-lg hairline border">
@@ -188,11 +195,11 @@ export function AudienceBuilder({
                         {r.name ?? "—"}
                       </td>
                       <td className="px-3 py-1.5 font-mono tabular-nums" style={{ color: "var(--ink-secondary)" }}>
-                        {r.normalizedPhone ?? r.phone}
+                        {byEmail ? r.email : (r.normalizedPhone ?? r.phone)}
                       </td>
                       <td className="px-3 py-1.5 text-right">
-                        {!r.validPhone ? (
-                          <span className="badge-warning">invalid number</span>
+                        {(byEmail ? !r.validEmail : !r.validPhone) ? (
+                          <span className="badge-warning">{byEmail ? "invalid address" : "invalid number"}</span>
                         ) : r.optedOut ? (
                           <span className="badge-critical">opted out</span>
                         ) : null}

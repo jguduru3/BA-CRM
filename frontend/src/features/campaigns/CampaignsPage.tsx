@@ -12,7 +12,7 @@ import { QueryError } from "@/components/ui/QueryError";
 import { Tabs } from "@/components/ui/Tabs";
 import { CampaignDetailDrawer } from "./CampaignDetailDrawer";
 import { CampaignForm, type CampaignDraft, validateTemplateParams } from "./CampaignForm";
-import { type CampaignRow, type CampaignStatus, normalizeStatus, STATUS_LABEL, STATUS_TONE } from "./campaignTypes";
+import { type CampaignRow, type CampaignStatus, CHANNEL_LABEL, normalizeStatus, STATUS_LABEL, STATUS_TONE } from "./campaignTypes";
 
 type Filter = "all" | "review" | "active" | "done";
 const FILTERS: Record<Filter, CampaignStatus[] | null> = {
@@ -100,9 +100,10 @@ export default function CampaignsPage() {
           <p className="text-sm font-medium truncate" style={{ color: "var(--ink-primary)" }}>
             {r.name}
           </p>
-          <p className="text-[11px] capitalize" style={{ color: "var(--ink-muted)" }}>
-            {r.type}
-            {r.templateName ? ` · ${r.templateName}` : ""}
+          <p className="text-[11px]" style={{ color: "var(--ink-muted)" }}>
+            {CHANNEL_LABEL[r.type] ?? r.type}
+            {r.type === "whatsapp" && r.templateName ? ` · ${r.templateName}` : ""}
+            {r.type === "email" && r.emailSubject ? ` · ${r.emailSubject}` : ""}
           </p>
         </div>
       ),

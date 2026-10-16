@@ -37,3 +37,9 @@ describe("automation builder helpers", () => {
     expect(formatDuration(125_000)).toBe("2m 5s");
   });
 });
+
+describe("saveToRecord", () => {
+  it("keeps an explicit false so the server does not fall back to the default", () => {
+    expect(JSON.parse(serializeConfig({ promptTemplate: "x", saveToRecord: false }))).toEqual({ promptTemplate: "x", saveToRecord: false });
+  });
+});

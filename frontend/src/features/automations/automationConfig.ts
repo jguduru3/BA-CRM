@@ -83,6 +83,8 @@ export type ActionConfig = Record<string, unknown> & {
   method?: string;
   headersJson?: string;
   bodyTemplate?: string;
+  /** Append the output as a Note on the context's record (default true). */
+  saveToRecord?: boolean;
 };
 
 export function parseJsonObject(raw: string | null | undefined): Record<string, unknown> {

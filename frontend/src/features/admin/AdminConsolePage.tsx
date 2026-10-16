@@ -107,7 +107,7 @@ interface SystemInfo {
   java: string;
   uptimeSeconds: number;
   memory: { usedMb: number; maxMb: number };
-  features: Record<string, string | boolean | null>;
+  features: Record<string, string | boolean | number | null>;
 }
 
 const ROLES: Role[] = ["SUPER_ADMIN", "VP_SALES", "MANAGER", "EXECUTIVE", "INSIDE_SALES", "FIELD_SALES", "SUPPORT"];
@@ -775,6 +775,8 @@ const FEATURE_LABELS: Record<string, string> = {
   applicationInsights: "Application Insights",
   whatsappSignedWebhooks: "WhatsApp signed webhooks",
   apiDocs: "Public API reference",
+  smsAzureCommunication: "SMS (Azure Communication Services)",
+  emailInboxPolling: "Inbox reply watching",
 };
 
 function SystemTab() {
@@ -814,12 +816,14 @@ function SystemTab() {
         </div>
         <ul className="divide-y" style={{ borderColor: "rgb(var(--panel-border) / 0.06)" }}>
           {Object.entries(s.features).map(([k, v]) => {
-            const on = v !== null && v !== false;
+            const on = v !== null && v !== false && v !== 0;
             return (
               <li key={k} className="flex items-center justify-between gap-4 py-2.5 text-sm">
                 <span style={{ color: "var(--ink-secondary)" }}>{FEATURE_LABELS[k] ?? k}</span>
                 {on ? (
-                  <span className="badge-good">{typeof v === "string" ? v : "Enabled"}</span>
+                  <span className="badge-good">
+                    {typeof v === "string" ? v : typeof v === "number" ? `${v} mailbox${v === 1 ? "" : "es"}` : "Enabled"}
+                  </span>
                 ) : (
                   <span className="badge-neutral">Not configured</span>
                 )}
