@@ -57,6 +57,17 @@ public class DealHealthJob {
         recomputeAll(Instant.now());
     }
 
+    /**
+     * One catch-up run shortly after start-up, so deals that existed before the
+     * health score (or were imported) get a score without waiting for the nightly
+     * run. Shares the nightly lock, so only one replica does it.
+     */
+    @Scheduled(initialDelayString = "${app.pipeline.health-startup-delay-ms:90000}", fixedDelay = Long.MAX_VALUE)
+    @SchedulerLock(name = "opportunities.dealHealth", lockAtMostFor = "PT30M")
+    public void afterStartup() {
+        recomputeAll(Instant.now());
+    }
+
     /** @return how many risk notifications were sent */
     public int recomputeAll(Instant now) {
         repair();
