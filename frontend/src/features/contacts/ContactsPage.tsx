@@ -28,6 +28,7 @@ import { RecordPagePanel } from "@/features/recordpages/RecordPagePanel";
 import { DuplicateDialog } from "@/features/duplicates/DuplicateDialog";
 import { isDuplicateError, saveChecked } from "@/features/duplicates/duplicates";
 import type { DuplicateError } from "@/features/duplicates/duplicates";
+import { EnrollInSequenceButton } from "@/features/sequences";
 
 export default function ContactsPage() {
   const [params, setParams] = useSearchParams();
@@ -313,6 +314,7 @@ export default function ContactsPage() {
         <ContactForm value={draft} onChange={(p) => setDraft((d) => ({ ...d, ...p }))} />
         {selected && (
           <div className="mt-5 pt-4 hairline border-t space-y-5">
+            <EnrollInSequenceButton relatedType="Contact" relatedId={selected.id} />
             <RecordPagePanel relatedType="Contact" relatedId={selected.id} readOnly={readOnly} />
             <AttachmentList relatedType="Contact" relatedId={selected.id} />
           </div>

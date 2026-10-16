@@ -19,6 +19,7 @@ import { RecordPagePanel } from "@/features/recordpages/RecordPagePanel";
 import { DuplicateDialog } from "@/features/duplicates/DuplicateDialog";
 import { isDuplicateError, saveChecked } from "@/features/duplicates/duplicates";
 import type { DuplicateError } from "@/features/duplicates/duplicates";
+import { EnrollInSequenceButton } from "@/features/sequences";
 
 export function LeadDrawer({
   lead,
@@ -218,6 +219,7 @@ export function LeadDrawer({
         <LeadForm value={draft} onChange={(p) => setDraft((d) => ({ ...d, ...p }))} disableSourceEdit={disableSourceEdit} />
         {lead && (
           <div className="mt-5 pt-4 hairline border-t space-y-5">
+            <EnrollInSequenceButton relatedType="Lead" relatedId={lead.id} />
             <RecordPagePanel relatedType="Lead" relatedId={lead.id} readOnly={readOnly} />
             <AttachmentList relatedType="Lead" relatedId={lead.id} />
           </div>
