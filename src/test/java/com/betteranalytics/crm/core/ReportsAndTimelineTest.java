@@ -61,9 +61,13 @@ class ReportsAndTimelineTest extends CrmTestSupport {
                 assertThat(row.path("wonValue").asLong()).isEqualTo(50);
             }
         }
-        // a role without lead access just sees zeros, not an error
+        // Support is read-only but org-wide, so it sees the same totals as the VP
         User support = user(org, Role.SUPPORT);
-        assertThat(getJson(support, "/api/reports/dashboard").path("totalLeads").asLong()).isZero();
+        assertThat(getJson(support, "/api/reports/dashboard").path("totalLeads").asLong())
+                .isEqualTo(getJson(vp, "/api/reports/dashboard").path("totalLeads").asLong());
+        // a role with no feature access at all still gets zeros rather than an error
+        User inside = user(newOrg(), Role.INSIDE_SALES);
+        assertThat(getJson(inside, "/api/reports/dashboard").path("totalLeads").asLong()).isZero();
     }
 
     @Test

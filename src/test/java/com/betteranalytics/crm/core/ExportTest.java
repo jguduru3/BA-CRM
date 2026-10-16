@@ -81,8 +81,9 @@ class ExportTest extends CrmTestSupport {
         // Support may export the timeline, but other people's activity content stays masked
         assertThat(csv(stream(support, "/api/exports/activities"))).contains("[restricted]").doesNotContain("Kickoff");
         assertThat(csv(stream(admin, "/api/exports/activities"))).contains("Kickoff");
-        assertThat(stream(support, "/api/exports/leads").getResponse().getStatus()).isEqualTo(403);
-        assertThat(stream(support, "/api/exports/opportunities").getResponse().getStatus()).isEqualTo(403);
+        // Support reads leads and deals org-wide (read-only role), so it may export them too
+        assertThat(stream(support, "/api/exports/leads").getResponse().getStatus()).isEqualTo(200);
+        assertThat(stream(support, "/api/exports/opportunities").getResponse().getStatus()).isEqualTo(200);
         assertThat(stream(admin, "/api/exports/nonsense").getResponse().getStatus()).isEqualTo(404);
 
         // old URL kept as an alias
