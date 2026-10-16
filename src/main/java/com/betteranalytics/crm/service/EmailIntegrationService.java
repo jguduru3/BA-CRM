@@ -12,6 +12,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.JavaMailSenderImpl;
 import org.springframework.stereotype.Service;
 
@@ -42,6 +43,11 @@ public class EmailIntegrationService {
     private ApplicationEventPublisher events;
     private static final String TIMEOUT_MS = "10000";
     private static final Pattern HOSTNAME = Pattern.compile("^[A-Za-z0-9.-]{1,253}$");
+    private static final Pattern HEADER_NAME = Pattern.compile("^[A-Za-z0-9-]{1,60}$");
+
+    /** SMTP sender seam (tests); the hardened {@link #buildSender} is used when absent. */
+    @Autowired(required = false)
+    private MailSenderFactory senderFactory;
     private static final Pattern FOLDER = Pattern.compile("^[\\p{L}\\p{N} ._/\\-\\[\\]]{1,100}$");
 
     // ── Validation (also used by AiAutomationController when accounts are created) ──
@@ -90,22 +96,74 @@ public class EmailIntegrationService {
     // ── Send ─────────────────────────────────────────────────────────────────
 
     public void sendEmail(EmailAccount account, String to, String subject, String body) {
-        InternetAddress recipient = requireSingleAddress(to);
-        JavaMailSenderImpl sender = buildSender(account);
         try {
-            MimeMessage msg = sender.createMimeMessage();
-            msg.setFrom(new InternetAddress(account.getEmailAddress(),
-                    account.getDisplayName() != null ? account.getDisplayName() : account.getEmailAddress()));
-            msg.setRecipients(Message.RecipientType.TO, new Address[]{recipient});
-            msg.setSubject(stripLineBreaks(subject), "UTF-8");
-            // Plain text: AI output / template values can never inject markup or scripts.
-            msg.setText(body != null ? body : "", "UTF-8");
-            sender.send(msg);
-            log.info("Email sent from account {} to {}", account.getId(), recipient.getAddress());
+            sendRaw(account, to, subject, body, Map.of());
+        } catch (IllegalArgumentException e) {
+            throw e;
         } catch (Exception e) {
             log.warn("SMTP send failed for account {}: {}", account.getId(), e.toString());
             throw new IllegalStateException("Failed to send email via the configured SMTP account", e);
         }
+    }
+
+    /**
+     * Campaign send: plain-text message with extra headers (List-Unsubscribe,
+     * Precedence…). Returns the Message-ID. Exceptions are thrown unwrapped so
+     * the caller can tell "nothing was sent" (connect / login) from a permanent
+     * rejection (5xx) — see {@link #classifyFailure}.
+     */
+    public String sendCampaignEmail(EmailAccount account, String to, String subject, String body,
+                                    Map<String, String> headers) throws Exception {
+        return sendRaw(account, to, subject, body, headers);
+    }
+
+    private String sendRaw(EmailAccount account, String to, String subject, String body,
+                           Map<String, String> headers) throws Exception {
+        InternetAddress recipient = requireSingleAddress(to);
+        JavaMailSender sender = senderFactory != null ? senderFactory.create(account) : buildSender(account);
+        MimeMessage msg = sender.createMimeMessage();
+        msg.setFrom(new InternetAddress(account.getEmailAddress(),
+                account.getDisplayName() != null ? account.getDisplayName() : account.getEmailAddress()));
+        msg.setRecipients(Message.RecipientType.TO, new Address[]{recipient});
+        msg.setSubject(stripLineBreaks(subject), "UTF-8");
+        // Plain text: AI output / template values can never inject markup or scripts.
+        msg.setText(body != null ? body : "", "UTF-8");
+        if (headers != null) {
+            for (Map.Entry<String, String> h : headers.entrySet()) {
+                if (h.getValue() == null || !HEADER_NAME.matcher(h.getKey()).matches()) continue;
+                msg.setHeader(h.getKey(), h.getValue().replaceAll("[\\r\\n]+", " ").trim());
+            }
+        }
+        msg.saveChanges();   // assigns Message-ID
+        String messageId = msg.getMessageID();
+        sender.send(msg);
+        log.info("Email sent from account {} to {}", account.getId(), recipient.getAddress());
+        return messageId;
+    }
+
+    /** How a failed send should be treated by an at-most-once sender. */
+    public enum FailureKind {
+        /** The server rejected the recipient/message (5xx): do not retry. */
+        PERMANENT,
+        /** Nothing reached the server (connect / TLS / login failure): safe to retry later. */
+        NOT_SENT,
+        /** Anything else (e.g. timeout mid-transfer): the message may have been accepted. */
+        UNKNOWN
+    }
+
+    public static FailureKind classifyFailure(Throwable e) {
+        if (com.betteranalytics.crm.sequences.DefaultSequenceChannelSender.isPermanentSmtpFailure(e)) return FailureKind.PERMANENT;
+        for (Throwable t = e; t != null; t = t.getCause() == t ? null : t.getCause()) {
+            if (t instanceof org.springframework.mail.MailAuthenticationException
+                    || t instanceof AuthenticationFailedException
+                    || "MailConnectException".equals(t.getClass().getSimpleName())
+                    || t instanceof java.net.ConnectException
+                    || t instanceof java.net.UnknownHostException
+                    || t instanceof javax.net.ssl.SSLHandshakeException) return FailureKind.NOT_SENT;
+            if (t instanceof org.springframework.mail.MailSendException mse && mse.getMessage() != null
+                    && mse.getMessage().contains("connection failed")) return FailureKind.NOT_SENT;
+        }
+        return FailureKind.UNKNOWN;
     }
 
     // ── Read ─────────────────────────────────────────────────────────────────
@@ -117,31 +175,12 @@ public class EmailIntegrationService {
         String folderToOpen = folderName != null && !folderName.isBlank() ? folderName : "INBOX";
         if (!FOLDER.matcher(folderToOpen).matches()) throw new IllegalArgumentException("folder name is not valid");
 
-        Properties props = new Properties();
-        String protocol = account.isImapSsl() ? "imaps" : "imap";
-        props.setProperty("mail.store.protocol", protocol);
-        props.setProperty("mail." + protocol + ".host", host);
-        props.setProperty("mail." + protocol + ".port", String.valueOf(port));
-        props.setProperty("mail." + protocol + ".ssl.enable", String.valueOf(account.isImapSsl()));
-        props.setProperty("mail." + protocol + ".ssl.checkserveridentity", "true");
-        if (!account.isImapSsl()) {
-            props.setProperty("mail.imap.starttls.enable", "true");
-            props.setProperty("mail.imap.starttls.required", "true");
-        }
-        props.setProperty("mail." + protocol + ".connectiontimeout", TIMEOUT_MS);
-        props.setProperty("mail." + protocol + ".timeout", TIMEOUT_MS);
-        props.setProperty("mail." + protocol + ".writetimeout", TIMEOUT_MS);
-
         List<Map<String, Object>> results = new ArrayList<>();
         List<SequenceSignals.InboundEmail> signals = new ArrayList<>();
         Store store = null;
         Folder folder = null;
         try {
-            Session session = Session.getInstance(props);
-            store = session.getStore(protocol);
-            store.connect(host, port, account.getSmtpUser() != null
-                    ? account.getSmtpUser() : account.getEmailAddress(),
-                    account.getSmtpPasswordEncrypted());
+            store = connectImap(account, host, port);
 
             folder = store.getFolder(folderToOpen);
             folder.open(Folder.READ_ONLY);
@@ -189,6 +228,42 @@ public class EmailIntegrationService {
             }
         }
         return results;
+    }
+
+    /**
+     * Connected IMAP store for the mailbox (validated public host, allow-listed port,
+     * TLS with server identity check, 10s connect/read/write timeouts). Caller closes it.
+     */
+    public Store connectImap(EmailAccount account) throws MessagingException {
+        return connectImap(account, requireSafeHost(account.getImapHost(), "imapHost"), requireImapPort(account.getImapPort()));
+    }
+
+    private Store connectImap(EmailAccount account, String host, int port) throws MessagingException {
+        Properties props = new Properties();
+        String protocol = account.isImapSsl() ? "imaps" : "imap";
+        props.setProperty("mail.store.protocol", protocol);
+        props.setProperty("mail." + protocol + ".host", host);
+        props.setProperty("mail." + protocol + ".port", String.valueOf(port));
+        props.setProperty("mail." + protocol + ".ssl.enable", String.valueOf(account.isImapSsl()));
+        props.setProperty("mail." + protocol + ".ssl.checkserveridentity", "true");
+        if (!account.isImapSsl()) {
+            props.setProperty("mail.imap.starttls.enable", "true");
+            props.setProperty("mail.imap.starttls.required", "true");
+        }
+        props.setProperty("mail." + protocol + ".connectiontimeout", TIMEOUT_MS);
+        props.setProperty("mail." + protocol + ".timeout", TIMEOUT_MS);
+        props.setProperty("mail." + protocol + ".writetimeout", TIMEOUT_MS);
+        Session session = Session.getInstance(props);
+        Store store = session.getStore(protocol);
+        try {
+            store.connect(host, port, account.getSmtpUser() != null
+                    ? account.getSmtpUser() : account.getEmailAddress(),
+                    account.getSmtpPasswordEncrypted());
+        } catch (MessagingException e) {
+            try { store.close(); } catch (Exception ignored) {}
+            throw e;
+        }
+        return store;
     }
 
     private JavaMailSenderImpl buildSender(EmailAccount account) {

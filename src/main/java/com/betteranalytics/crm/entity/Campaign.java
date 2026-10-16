@@ -45,9 +45,20 @@ public class Campaign {
     @Column(name = "template_params", columnDefinition = "TEXT")
     private String templateParams;
 
-    // For text/sms campaigns
+    // For text/sms campaigns (SMS: the message, with {{variables}}); WhatsApp: internal notes
     @Column(name = "message_body", columnDefinition = "TEXT")
     private String messageBody;
+
+    // Email campaigns (V80): sending mailbox (null = first active org mailbox) and
+    // plain-text subject / body templates with {{contact.name}}-style variables.
+    @Column(name = "email_account_id")
+    private Long emailAccountId;
+
+    @Column(name = "email_subject", length = 300)
+    private String emailSubject;
+
+    @Column(name = "email_body", columnDefinition = "TEXT")
+    private String emailBody;
 
     @Column(name = "scheduled_at")
     private Instant scheduledAt;

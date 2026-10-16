@@ -32,7 +32,12 @@ public class CampaignAudienceService {
 
     public record Filter(String field, String op, Object value, List<?> values) {}
 
-    public record LeadRow(Long id, String name, String phone, Long ownerId) {}
+    public record LeadRow(Long id, String name, String phone, Long ownerId, String email) {}
+
+    /** Which contact field a lead must have to be a recipient: "phone" (WhatsApp / SMS) or "email". */
+    public static String requiredField(String campaignType) {
+        return "email".equals(campaignType) ? "email" : "phone";
+    }
 
     @PersistenceContext
     private EntityManager em;
@@ -84,23 +89,33 @@ public class CampaignAudienceService {
 
     /** Leads matching the filters (optionally only those with a phone number). */
     public long count(Long orgId, List<Filter> filters, boolean withPhoneOnly) {
+        return count(orgId, filters, withPhoneOnly ? "phone" : null);
+    }
+
+    /** Leads matching the filters that have a non-blank {@code requiredField} ("phone" / "email" / null = any). */
+    public long count(Long orgId, List<Filter> filters, String requiredField) {
         CriteriaBuilder cb = em.getCriteriaBuilder();
         CriteriaQuery<Long> q = cb.createQuery(Long.class);
         Root<Lead> r = q.from(Lead.class);
-        q.select(cb.count(r)).where(predicates(cb, r, orgId, filters, withPhoneOnly, null));
+        q.select(cb.count(r)).where(predicates(cb, r, orgId, filters, requiredField, null));
         return em.createQuery(q).getSingleResult();
     }
 
     /** One page of matching leads with a phone, ordered by id, starting after {@code afterId}. */
     public List<LeadRow> page(Long orgId, List<Filter> filters, Long afterId, int limit) {
+        return page(orgId, filters, afterId, limit, "phone");
+    }
+
+    /** One page of matching leads with a non-blank {@code requiredField}, ordered by id, after {@code afterId}. */
+    public List<LeadRow> page(Long orgId, List<Filter> filters, Long afterId, int limit, String requiredField) {
         CriteriaBuilder cb = em.getCriteriaBuilder();
         CriteriaQuery<Object[]> q = cb.createQuery(Object[].class);
         Root<Lead> r = q.from(Lead.class);
-        q.multiselect(r.get("id"), r.get("name"), r.get("phone"), r.get("ownerId"))
-                .where(predicates(cb, r, orgId, filters, true, afterId))
+        q.multiselect(r.get("id"), r.get("name"), r.get("phone"), r.get("ownerId"), r.get("email"))
+                .where(predicates(cb, r, orgId, filters, requiredField, afterId))
                 .orderBy(cb.asc(r.get("id")));
         return em.createQuery(q).setMaxResults(Math.max(1, limit)).getResultList().stream()
-                .map(o -> new LeadRow((Long) o[0], (String) o[1], (String) o[2], (Long) o[3]))
+                .map(o -> new LeadRow((Long) o[0], (String) o[1], (String) o[2], (Long) o[3], (String) o[4]))
                 .toList();
     }
 
@@ -109,17 +124,17 @@ public class CampaignAudienceService {
         CriteriaBuilder cb = em.getCriteriaBuilder();
         CriteriaQuery<Long> q = cb.createQuery(Long.class);
         Root<Lead> r = q.from(Lead.class);
-        q.select(r.get("id")).where(predicates(cb, r, orgId, filters, false, null)).orderBy(cb.asc(r.get("id")));
+        q.select(r.get("id")).where(predicates(cb, r, orgId, filters, null, null)).orderBy(cb.asc(r.get("id")));
         return em.createQuery(q).setMaxResults(Math.max(1, limit)).getResultList();
     }
 
     private Predicate[] predicates(CriteriaBuilder cb, Root<Lead> r, Long orgId, List<Filter> filters,
-                                   boolean withPhoneOnly, Long afterId) {
+                                   String requiredField, Long afterId) {
         List<Predicate> ps = new ArrayList<>();
         ps.add(cb.equal(r.get("organizationId"), orgId));
-        if (withPhoneOnly) {
-            ps.add(cb.isNotNull(r.get("phone")));
-            ps.add(cb.notEqual(cb.trim(r.<String>get("phone")), ""));
+        if ("phone".equals(requiredField) || "email".equals(requiredField)) {
+            ps.add(cb.isNotNull(r.get(requiredField)));
+            ps.add(cb.notEqual(cb.trim(r.<String>get(requiredField)), ""));
         }
         if (afterId != null) ps.add(cb.greaterThan(r.get("id"), afterId));
         for (Filter f : filters) ps.add(toPredicate(cb, r, f));

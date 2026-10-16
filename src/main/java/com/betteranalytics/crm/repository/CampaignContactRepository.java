@@ -48,6 +48,16 @@ public interface CampaignContactRepository extends JpaRepository<CampaignContact
            "AND cc.normalizedPhone IN :phones")
     List<String> findExistingPhones(@Param("campaignId") Long campaignId, @Param("phones") Collection<String> phones);
 
+    /** Which of these (lowercase) addresses are already recipients of the campaign. */
+    @Query("SELECT cc.emailNormalized FROM CampaignContact cc WHERE cc.campaignId = :campaignId " +
+           "AND cc.emailNormalized IN :emails")
+    List<String> findExistingEmails(@Param("campaignId") Long campaignId, @Param("emails") Collection<String> emails);
+
+    /** Organizations that sent an SMS campaign to this number (inbound SMS STOP mapping). */
+    @Query("SELECT DISTINCT cc.organizationId FROM CampaignContact cc, Campaign c WHERE c.id = cc.campaignId " +
+           "AND c.type = 'sms' AND cc.normalizedPhone = :phone")
+    List<Long> findSmsOrganizationsByPhone(@Param("phone") String normalizedPhone);
+
     @Query("SELECT cc.id FROM CampaignContact cc WHERE cc.campaignId = :campaignId AND cc.status = 'pending' ORDER BY cc.id")
     List<Long> findPendingIds(@Param("campaignId") Long campaignId, Pageable pageable);
 

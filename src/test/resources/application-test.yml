@@ -23,6 +23,13 @@ app:
     allow-unsigned-webhooks: false
   campaigns:
     scheduler-initial-delay-ms: 3600000
+    email-per-minute: 0
+    sms-per-minute: 0
+  email:
+    inbox-poll:
+      initial-delay-ms: 3600000
+  sms:
+    events-secret: test-sms-events-secret
   automations:
     scheduler-initial-delay-ms: 3600000
   sequences:

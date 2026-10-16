@@ -167,6 +167,31 @@ app:
     # below) — local disk, so file/image uploads work with zero cloud setup.
     local-dir: ${LOCAL_UPLOAD_DIR:./data/uploads}
 
+  # Public origin of the app as recipients reach it (e.g. https://crm.example.com).
+  # Used for one-click email unsubscribe links; blank = mailto: unsubscribe only.
+  public-base-url: ${APP_PUBLIC_BASE_URL:}
+
+  campaigns:
+    # Send rate per sending mailbox / for the SMS sender (per app instance); 0 = unthrottled.
+    email-per-minute: ${CAMPAIGN_EMAIL_PER_MINUTE:60}
+    sms-per-minute: ${CAMPAIGN_SMS_PER_MINUTE:60}
+
+  sms:
+    # Azure Communication Services: "endpoint=https://<res>.communication.azure.com/;accesskey=<base64>"
+    # and the E.164 sender number. Either blank = SMS campaigns disabled (launch → 409).
+    connection-string: ${AZURE_COMMUNICATION_CONNECTION_STRING:}
+    from: ${AZURE_SMS_FROM:}
+    # Shared secret for the Event Grid webhook POST /api/sms/events?secret=… (inbound STOP/START).
+    events-secret: ${AZURE_SMS_EVENTS_SECRET:}
+
+  email:
+    inbox-poll:
+      # Reads new messages of mailboxes with "Watch inbox for replies" on (sequence replies,
+      # bounces, unsubscribe replies, activity log). One instance at a time (ShedLock).
+      enabled: ${EMAIL_INBOX_POLL_ENABLED:true}
+      delay-ms: ${EMAIL_INBOX_POLL_DELAY_MS:300000}
+      batch-size: ${EMAIL_INBOX_POLL_BATCH:50}
+
 azure:
   blob:
     connection-string: ${AZURE_STORAGE_CONNECTION_STRING:}

@@ -41,7 +41,7 @@ public class DefaultSequenceChannelSender implements SequenceChannelSender {
         }
     }
 
-    static boolean isPermanentSmtpFailure(Throwable e) {
+    public static boolean isPermanentSmtpFailure(Throwable e) {
         for (Throwable t = e; t != null; t = t.getCause() == t ? null : t.getCause()) {
             if (t instanceof SendFailedException) return true;
             if (t instanceof MailSendException mse) {

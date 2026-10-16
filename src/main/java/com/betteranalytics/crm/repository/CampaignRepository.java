@@ -25,6 +25,8 @@ public interface CampaignRepository extends JpaRepository<Campaign, Long> {
     /** Campaigns in a status for a channel (scheduler resumes interrupted dispatches). */
     List<Campaign> findByStatusAndType(String status, String type);
 
+    List<Campaign> findByStatusAndTypeIn(String status, java.util.Collection<String> types);
+
     @Query("SELECT c.status FROM Campaign c WHERE c.id = :id")
     Optional<String> findStatusById(@Param("id") Long id);
 
@@ -54,4 +56,11 @@ public interface CampaignRepository extends JpaRepository<Campaign, Long> {
     @Query("UPDATE Campaign c SET c.status = 'completed', c.completedAt = :now, c.updatedAt = :now, " +
            "c.version = c.version + 1 WHERE c.id = :id AND c.status = 'sending'")
     int markCompleted(@Param("id") Long id, @Param("now") Instant now);
+
+    /** sending → paused, only if still sending (dispatcher gives up after repeated mailbox / gateway failures). */
+    @Transactional
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE Campaign c SET c.status = 'paused', c.updatedAt = :now, " +
+           "c.version = c.version + 1 WHERE c.id = :id AND c.status = 'sending'")
+    int markPausedIfSending(@Param("id") Long id, @Param("now") Instant now);
 }

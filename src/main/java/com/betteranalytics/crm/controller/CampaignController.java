@@ -45,6 +45,12 @@ import java.util.*;
  * DELETE /api/campaigns/{id}/contacts/{ccId}     — remove recipient (draft / rejected)
  * POST   /api/campaigns/{id}/audience/preview    — count + first 50 recipients for the filters
  * POST   /api/campaigns/{id}/audience/apply      — add every matching lead as a recipient
+ * GET    /api/campaigns/channels                 — which channels can send right now
+ *
+ * Channels: whatsapp (approved template via a WhatsApp account), email (subject +
+ * plain-text body via an org mailbox, List-Unsubscribe, email opt-outs honoured),
+ * sms (messageBody via Azure Communication Services; 409 "SMS is not configured"
+ * on launch when AZURE_COMMUNICATION_CONNECTION_STRING / AZURE_SMS_FROM are unset).
  */
 @RestController
 @RequestMapping("/api/campaigns")
@@ -68,6 +74,8 @@ public class CampaignController {
     private static final int PREVIEW_SIZE = 50;
     private static final int APPLY_PAGE = 500;
     private static final int APPLY_MAX = 50_000;
+    private static final int MAX_EMAIL_BODY = 100_000;
+    private static final int MAX_SMS_BODY = 1_600;
 
     private final CampaignRepository        campaignRepo;
     private final CampaignContactRepository contactRepo;
@@ -84,6 +92,9 @@ public class CampaignController {
     private final NotificationService       notificationService;
     private final AuditService              auditService;
     private final ObjectMapper              objectMapper;
+    private final EmailAccountRepository    emailAccountRepo;
+    private final EmailConsentService       emailConsentService;
+    private final SmsSender                 smsSender;
 
     public CampaignController(CampaignRepository campaignRepo,
                               CampaignContactRepository contactRepo,
@@ -99,7 +110,10 @@ public class CampaignController {
                               CurrentUser currentUser,
                               NotificationService notificationService,
                               AuditService auditService,
-                              ObjectMapper objectMapper) {
+                              ObjectMapper objectMapper,
+                              EmailAccountRepository emailAccountRepo,
+                              EmailConsentService emailConsentService,
+                              SmsSender smsSender) {
         this.campaignRepo = campaignRepo;
         this.contactRepo = contactRepo;
         this.waAccountRepo = waAccountRepo;
@@ -115,6 +129,37 @@ public class CampaignController {
         this.notificationService = notificationService;
         this.auditService = auditService;
         this.objectMapper = objectMapper;
+        this.emailAccountRepo = emailAccountRepo;
+        this.emailConsentService = emailConsentService;
+        this.smsSender = smsSender;
+    }
+
+    /** Which channels can send for the caller's org: {whatsapp|email|sms: {configured, detail}}. */
+    @GetMapping("/channels")
+    public Map<String, Object> channels() {
+        User actor = currentUser.get();
+        permissionService.require(actor, Action.VIEW, ResourceType.CAMPAIGN, actor.getOrganizationId(), null);
+        Long org = actor.getOrganizationId();
+        boolean wa = waAccountRepo.findFirstByOrganizationIdAndActiveTrue(org).isPresent();
+        int mailboxes = emailAccountRepo.findByOrganizationIdAndIsActiveTrue(org).size();
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("whatsapp", channel(wa, wa ? "Connected WhatsApp sender" : "Connect a WhatsApp account first"));
+        out.put("email", channel(mailboxes > 0, mailboxes > 0 ? mailboxes + " connected mailbox" + (mailboxes == 1 ? "" : "es")
+                : "Connect an email account (Automations → Email accounts) first"));
+        Map<String, Object> sms = channel(smsSender.isConfigured(), smsSender.isConfigured()
+                ? "Azure Communication Services, sender " + smsSender.fromNumber()
+                : "SMS is not configured (AZURE_COMMUNICATION_CONNECTION_STRING and AZURE_SMS_FROM)");
+        sms.put("from", smsSender.fromNumber());
+        out.put("sms", sms);
+        out.put("emailPerMinute", dispatcher.emailPerMinute());
+        return out;
+    }
+
+    private static Map<String, Object> channel(boolean configured, String detail) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("configured", configured);
+        m.put("detail", detail);
+        return m;
     }
 
     // ── CRUD ─────────────────────────────────────────────────────────────────
@@ -226,6 +271,10 @@ public class CampaignController {
         checkVersion(c, versionFrom(body));
         if ("whatsapp".equals(c.getType()) && (c.getTemplateName() == null || c.getTemplateName().isBlank()))
             throw new IllegalArgumentException("A WhatsApp campaign needs a templateName before it can be submitted");
+        if ("email".equals(c.getType()) && (blank(c.getEmailSubject()) || blank(c.getEmailBody())))
+            throw new IllegalArgumentException("An email campaign needs an emailSubject and emailBody before it can be submitted");
+        if ("sms".equals(c.getType()) && blank(c.getMessageBody()))
+            throw new IllegalArgumentException("An SMS campaign needs a messageBody before it can be submitted");
         transition(c, "submitted");
         c.setSubmittedAt(Instant.now());
         c.setApprovedBy(null);
@@ -306,13 +355,15 @@ public class CampaignController {
             throw new IllegalStateException("Campaign must be approved before launch, got '" + c.getStatus() + "'");
         }
         if ("whatsapp".equals(c.getType())) requireWhatsAppReady(c);
+        else if ("email".equals(c.getType())) requireEmailReady(c);
+        else if ("sms".equals(c.getType())) requireSmsReady(c);
 
         String target = c.getScheduledAt() != null && c.getScheduledAt().isAfter(Instant.now()) ? "scheduled" : "sending";
         transition(c, target);
         Campaign saved = campaignRepo.saveAndFlush(c);
         auditService.log("launch", "campaigns", c.getId(), c.getName(), null,
                 Map.of("launchedBy", actor.getId(), "status", target));
-        if ("sending".equals(target) && "whatsapp".equals(c.getType())) {
+        if ("sending".equals(target) && CampaignDispatcher.CHANNELS.contains(c.getType())) {
             dispatcher.dispatchAsync(c.getId());   // after commit, on the bounded executor
         }
         return ResponseEntity.ok(saved);
@@ -326,9 +377,12 @@ public class CampaignController {
     @PostMapping("/{id}/resume")
     @Transactional
     public ResponseEntity<Campaign> resume(@PathVariable Long id, @RequestBody(required = false) Map<String, Object> body) {
+        User actor = currentUser.get();
+        Campaign pre = find(id, actor);
+        if (pre != null && "sms".equals(pre.getType()) && "paused".equals(pre.getStatus())) requireSmsReady(pre);
         ResponseEntity<Campaign> r = simpleTransition(id, body, "sending", "resume");
         Campaign c = r.getBody();
-        if (c != null && "whatsapp".equals(c.getType())) dispatcher.dispatchAsync(c.getId());
+        if (c != null && CampaignDispatcher.CHANNELS.contains(c.getType())) dispatcher.dispatchAsync(c.getId());
         return r;
     }
 
@@ -383,6 +437,7 @@ public class CampaignController {
             throw new IllegalArgumentException("At most " + MAX_CONTACTS_PER_REQUEST + " recipients per request");
 
         Long orgId = actor.getOrganizationId();
+        boolean byEmail = "email".equals(c.getType());
         int invalid = 0;
         Map<String, CampaignContact> candidates = new LinkedHashMap<>();
         int duplicates = 0;
@@ -390,39 +445,49 @@ public class CampaignController {
         for (Map<String, Object> e : entries) {
             if (e == null) { invalid++; continue; }
             Object rawPhone = e.get("phoneNumber") != null ? e.get("phoneNumber") : e.get("phone");
-            String normalized = rawPhone instanceof String p ? PhoneNumbers.tryNormalize(p) : null;
-            if (normalized == null) { invalid++; continue; }
-            if (candidates.containsKey(normalized)) { duplicates++; continue; }
-
-            CampaignContact cc = newRecipient(c, normalized, now);
-            if (e.get("name") instanceof String n && !n.isBlank())
-                cc.setName(n.length() > 200 ? n.substring(0, 200) : n);
+            String phone = rawPhone instanceof String p ? PhoneNumbers.tryNormalize(p) : null;
+            String rawEmail = e.get("email") instanceof String m && !m.isBlank() ? m.trim() : null;
+            String email = EmailConsentService.normalize(rawEmail);
+            String rt = null;
+            Long rid = null;
             if (e.get("relatedType") != null || e.get("relatedId") != null) {
-                if (!(e.get("relatedType") instanceof String rt) || !RELATED_TYPES.contains(rt))
+                if (!(e.get("relatedType") instanceof String t) || !RELATED_TYPES.contains(t))
                     throw new IllegalArgumentException("relatedType must be Lead or Contact");
-                Long rid = e.get("relatedId") instanceof Number num && !(num instanceof Double) && !(num instanceof Float)
+                rt = t;
+                rid = e.get("relatedId") instanceof Number num && !(num instanceof Double) && !(num instanceof Float)
                         ? num.longValue() : null;
                 if (rid == null) throw new IllegalArgumentException("relatedId must be an integer id");
-                boolean exists = "Lead".equals(rt)
-                        ? leadRepo.findByIdAndOrganizationId(rid, orgId).isPresent()
-                        : crmContactRepo.findByIdAndOrganizationId(rid, orgId).isPresent();
-                if (!exists) throw new IllegalArgumentException(rt + " " + rid + " not found");
-                cc.setRelatedType(rt);
-                cc.setRelatedId(rid);
+                String[] recordContact = recordContact(rt, rid, orgId);
+                if (recordContact == null) throw new IllegalArgumentException(rt + " " + rid + " not found");
+                // Missing address -> the linked record's own phone / email.
+                if (rawPhone == null) phone = PhoneNumbers.tryNormalize(recordContact[0]);
+                if (rawEmail == null) { rawEmail = recordContact[1]; email = EmailConsentService.normalize(rawEmail); }
             }
-            candidates.put(normalized, cc);
+            String key = byEmail ? email : phone;
+            if (key == null) { invalid++; continue; }
+            if (candidates.containsKey(key)) { duplicates++; continue; }
+
+            CampaignContact cc = newRecipient(c, phone, byEmail ? rawEmail : null, byEmail ? email : null, now);
+            if (e.get("name") instanceof String n && !n.isBlank())
+                cc.setName(n.length() > 200 ? n.substring(0, 200) : n);
+            cc.setRelatedType(rt);
+            cc.setRelatedId(rid);
+            candidates.put(key, cc);
         }
         Set<String> existing = new HashSet<>();
-        List<String> phones = new ArrayList<>(candidates.keySet());
-        for (int i = 0; i < phones.size(); i += 500) {
-            existing.addAll(contactRepo.findExistingPhones(id, phones.subList(i, Math.min(phones.size(), i + 500))));
+        List<String> keys = new ArrayList<>(candidates.keySet());
+        for (int i = 0; i < keys.size(); i += 500) {
+            List<String> chunk = keys.subList(i, Math.min(keys.size(), i + 500));
+            existing.addAll(byEmail ? contactRepo.findExistingEmails(id, chunk) : contactRepo.findExistingPhones(id, chunk));
         }
         List<CampaignContact> toSave = new ArrayList<>();
         for (Map.Entry<String, CampaignContact> en : candidates.entrySet()) {
             if (existing.contains(en.getKey())) duplicates++;
             else toSave.add(en.getValue());
         }
-        int optedOut = consentService.optedOut(orgId, toSave.stream().map(CampaignContact::getNormalizedPhone).toList()).size();
+        int optedOut = byEmail
+                ? emailConsentService.optedOut(orgId, toSave.stream().map(CampaignContact::getEmailNormalized).toList()).size()
+                : consentService.optedOut(orgId, toSave.stream().map(CampaignContact::getNormalizedPhone).toList()).size();
         try {
             contactRepo.saveAll(toSave);
             contactRepo.flush();
@@ -471,15 +536,19 @@ public class CampaignController {
         if (c == null) return ResponseEntity.notFound().build();
         Long orgId = actor.getOrganizationId();
         List<CampaignAudienceService.Filter> filters = audienceService.parse(criteriaFrom(body, c), false);
+        boolean byEmail = "email".equals(c.getType());
+        String field = CampaignAudienceService.requiredField(c.getType());
 
-        long matching = audienceService.count(orgId, filters, false);
-        long withPhone = audienceService.count(orgId, filters, true);
-        List<CampaignAudienceService.LeadRow> rows = audienceService.page(orgId, filters, null, PREVIEW_SIZE);
-        Set<String> optedOut = consentService.optedOut(orgId,
-                rows.stream().map(r -> PhoneNumbers.tryNormalize(r.phone())).filter(Objects::nonNull).toList());
+        long matching = audienceService.count(orgId, filters, (String) null);
+        long withField = audienceService.count(orgId, filters, field);
+        List<CampaignAudienceService.LeadRow> rows = audienceService.page(orgId, filters, null, PREVIEW_SIZE, field);
+        Set<String> optedOut = byEmail
+                ? emailConsentService.optedOut(orgId, rows.stream().map(r -> EmailConsentService.normalize(r.email())).filter(Objects::nonNull).toList())
+                : consentService.optedOut(orgId, rows.stream().map(r -> PhoneNumbers.tryNormalize(r.phone())).filter(Objects::nonNull).toList());
         List<Map<String, Object>> recipients = new ArrayList<>();
         for (CampaignAudienceService.LeadRow r : rows) {
             String normalized = PhoneNumbers.tryNormalize(r.phone());
+            String email = EmailConsentService.normalize(r.email());
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("relatedType", "Lead");
             m.put("relatedId", r.id());
@@ -487,15 +556,20 @@ public class CampaignController {
             m.put("phone", r.phone());
             m.put("normalizedPhone", normalized);
             m.put("validPhone", normalized != null);
-            m.put("optedOut", normalized != null && optedOut.contains(normalized));
+            m.put("email", r.email());
+            m.put("validEmail", email != null);
+            String key = byEmail ? email : normalized;
+            m.put("optedOut", key != null && optedOut.contains(key));
             recipients.add(m);
         }
         Map<String, Object> out = new LinkedHashMap<>();
-        out.put("count", withPhone);
+        out.put("channelField", field);
+        out.put("count", withField);
         out.put("matching", matching);
-        out.put("withoutPhone", matching - withPhone);
+        out.put("withoutPhone", byEmail ? matching - audienceService.count(orgId, filters, "phone") : matching - withField);
+        out.put("withoutEmail", byEmail ? matching - withField : matching - audienceService.count(orgId, filters, "email"));
         out.put("recipients", recipients);
-        out.put("truncated", withPhone > recipients.size());
+        out.put("truncated", withField > recipients.size());
         return ResponseEntity.ok(out);
     }
 
@@ -511,30 +585,35 @@ public class CampaignController {
         Long orgId = actor.getOrganizationId();
         String criteria = criteriaFrom(body, c);
         List<CampaignAudienceService.Filter> filters = audienceService.parse(criteria, false);
+        boolean byEmail = "email".equals(c.getType());
+        String field = CampaignAudienceService.requiredField(c.getType());
 
         int added = 0, invalid = 0, duplicates = 0, scanned = 0;
         Long after = null;
         Instant now = Instant.now();
         while (scanned < APPLY_MAX) {
-            List<CampaignAudienceService.LeadRow> rows = audienceService.page(orgId, filters, after, APPLY_PAGE);
+            List<CampaignAudienceService.LeadRow> rows = audienceService.page(orgId, filters, after, APPLY_PAGE, field);
             if (rows.isEmpty()) break;
             after = rows.get(rows.size() - 1).id();
             scanned += rows.size();
             Map<String, CampaignContact> batch = new LinkedHashMap<>();
             for (CampaignAudienceService.LeadRow r : rows) {
-                String normalized = PhoneNumbers.tryNormalize(r.phone());
-                if (normalized == null) { invalid++; continue; }
-                if (batch.containsKey(normalized)) { duplicates++; continue; }
-                CampaignContact cc = newRecipient(c, normalized, now);
+                String phone = PhoneNumbers.tryNormalize(r.phone());
+                String email = EmailConsentService.normalize(r.email());
+                String key = byEmail ? email : phone;
+                if (key == null) { invalid++; continue; }
+                if (batch.containsKey(key)) { duplicates++; continue; }
+                CampaignContact cc = newRecipient(c, phone, byEmail ? r.email().trim() : null, byEmail ? email : null, now);
                 cc.setName(r.name() != null && r.name().length() > 200 ? r.name().substring(0, 200) : r.name());
                 cc.setRelatedType("Lead");
                 cc.setRelatedId(r.id());
-                batch.put(normalized, cc);
+                batch.put(key, cc);
             }
             if (batch.isEmpty()) continue;
-            Set<String> existing = new HashSet<>(contactRepo.findExistingPhones(id, batch.keySet()));
+            Set<String> existing = new HashSet<>(byEmail ? contactRepo.findExistingEmails(id, batch.keySet())
+                    : contactRepo.findExistingPhones(id, batch.keySet()));
             List<CampaignContact> toSave = batch.values().stream()
-                    .filter(cc -> !existing.contains(cc.getNormalizedPhone())).toList();
+                    .filter(cc -> !existing.contains(byEmail ? cc.getEmailNormalized() : cc.getNormalizedPhone())).toList();
             duplicates += batch.size() - toSave.size();
             try {
                 contactRepo.saveAll(toSave);
@@ -575,12 +654,22 @@ public class CampaignController {
         return c;
     }
 
-    private CampaignContact newRecipient(Campaign c, String normalized, Instant now) {
+    /** [phone, email] of a Lead / Contact in the org, or null when it does not exist. */
+    private String[] recordContact(String relatedType, Long id, Long orgId) {
+        if ("Lead".equals(relatedType)) {
+            return leadRepo.findByIdAndOrganizationId(id, orgId).map(l -> new String[]{l.getPhone(), l.getEmail()}).orElse(null);
+        }
+        return crmContactRepo.findByIdAndOrganizationId(id, orgId).map(x -> new String[]{x.getPhone(), x.getEmail()}).orElse(null);
+    }
+
+    private CampaignContact newRecipient(Campaign c, String normalizedPhone, String email, String emailNormalized, Instant now) {
         CampaignContact cc = new CampaignContact();
         cc.setCampaignId(c.getId());
         cc.setOrganizationId(c.getOrganizationId());
-        cc.setPhoneNumber(normalized);
-        cc.setNormalizedPhone(normalized);
+        cc.setPhoneNumber(normalizedPhone);
+        cc.setNormalizedPhone(normalizedPhone);
+        cc.setEmail(email == null ? null : (email.length() > 320 ? email.substring(0, 320) : email));
+        cc.setEmailNormalized(emailNormalized);
         cc.setStatus("pending");
         cc.setCreatedAt(now);
         cc.setUpdatedAt(now);
@@ -618,7 +707,26 @@ public class CampaignController {
             whatsAppService.parseTemplateComponents(body.getTemplateParams());   // 400 when not a JSON array
             c.setTemplateParams(body.getTemplateParams().isBlank() ? null : body.getTemplateParams());
         }
-        if (body.getMessageBody() != null) c.setMessageBody(body.getMessageBody());
+        if (body.getMessageBody() != null) {
+            if ("sms".equals(c.getType()) && body.getMessageBody().length() > MAX_SMS_BODY)
+                throw new IllegalArgumentException("messageBody exceeds " + MAX_SMS_BODY + " characters");
+            c.setMessageBody(body.getMessageBody());
+        }
+        if (body.getEmailSubject() != null) {
+            String subj = body.getEmailSubject().replaceAll("[\\r\\n]+", " ").trim();
+            if (subj.length() > 300) throw new IllegalArgumentException("emailSubject exceeds 300 characters");
+            c.setEmailSubject(subj.isEmpty() ? null : subj);
+        }
+        if (body.getEmailBody() != null) {
+            if (body.getEmailBody().length() > MAX_EMAIL_BODY)
+                throw new IllegalArgumentException("emailBody exceeds " + MAX_EMAIL_BODY + " characters");
+            c.setEmailBody(body.getEmailBody().isBlank() ? null : body.getEmailBody());
+        }
+        if (body.getEmailAccountId() != null) {
+            if (emailAccountRepo.findByIdAndOrganizationId(body.getEmailAccountId(), orgId).isEmpty())
+                throw new IllegalArgumentException("emailAccountId does not refer to an email account in your organization");
+            c.setEmailAccountId(body.getEmailAccountId());
+        }
         if (body.getScheduledAt() != null) c.setScheduledAt(body.getScheduledAt());
         if (body.getAudienceCriteriaJson() != null) {
             if (!body.getAudienceCriteriaJson().isBlank()) audienceService.parse(body.getAudienceCriteriaJson(), true);
@@ -649,6 +757,22 @@ public class CampaignController {
                         .map(WhatsAppAccount::isActive).orElse(false)
                 : waAccountRepo.findFirstByOrganizationIdAndActiveTrue(c.getOrganizationId()).isPresent();
         if (!hasAccount) throw new IllegalStateException("No active WhatsApp account for this campaign");
+    }
+
+    private void requireEmailReady(Campaign c) {
+        if (blank(c.getEmailSubject()) || blank(c.getEmailBody()))
+            throw new IllegalStateException("An email campaign needs a subject and a body before launch");
+        EmailAccount a = dispatcher.resolveEmailAccount(c);
+        if (a == null || !a.isActive()) throw new IllegalStateException("No active email account for this campaign");
+    }
+
+    private void requireSmsReady(Campaign c) {
+        if (!smsSender.isConfigured()) throw new IllegalStateException("SMS is not configured");
+        if (blank(c.getMessageBody())) throw new IllegalStateException("An SMS campaign needs a message before launch");
+    }
+
+    private static boolean blank(String s) {
+        return s == null || s.isBlank();
     }
 
     private static Long versionFrom(Map<String, Object> body) {

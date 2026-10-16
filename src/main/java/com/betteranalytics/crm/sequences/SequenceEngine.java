@@ -2,6 +2,7 @@ package com.betteranalytics.crm.sequences;
 
 import com.betteranalytics.crm.entity.*;
 import com.betteranalytics.crm.repository.*;
+import com.betteranalytics.crm.service.EmailConsentService;
 import com.betteranalytics.crm.service.EmailIntegrationService;
 import com.betteranalytics.crm.service.NotificationService;
 import com.betteranalytics.crm.service.PhoneNumbers;
@@ -84,6 +85,8 @@ public class SequenceEngine {
     private final TransactionTemplate tx;
     private final TransactionTemplate txNew;
     private volatile Boolean postgres;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private EmailConsentService emailConsentService;
 
     public SequenceEngine(SequenceRepository sequenceRepo, SequenceStepRepository stepRepo,
                           SequenceEnrollmentRepository enrollmentRepo, SequenceStepExecutionRepository execRepo,
@@ -281,6 +284,8 @@ public class SequenceEngine {
         } else if (SequenceStep.EMAIL.equals(channel)) {
             EmailAccount account = resolveEmailAccount(seq, e);
             if (e.getContactEmail() == null) skip = "No email address on the record";
+            else if (emailConsentService != null
+                    && emailConsentService.isOptedOut(e.getOrganizationId(), e.getContactEmail())) skip = "Unsubscribed from email";
             else if (account == null) skip = "No active sending mailbox for this sequence";
             else {
                 String subject = SequenceTemplates.render(blankTo(step.getSubject(), ""), vars);
