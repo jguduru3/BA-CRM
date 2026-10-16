@@ -320,7 +320,7 @@ body {
 
   /* ── Kanban (Notion-style boards) ─────────────────────────────────── */
   .kanban-track {
-    @apply flex gap-4 overflow-x-auto thin-scroll pb-4;
+    @apply flex items-start gap-4 overflow-x-auto thin-scroll pb-4;
     scroll-snap-type: x proximity;
   }
   .kanban-column {
