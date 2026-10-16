@@ -54,3 +54,6 @@ frontend/dist/
 frontend/vite.config.js
 frontend/vite.config.d.ts
 frontend/*.tsbuildinfo
+
+# Claude Code local state (worktrees, launch config)
+.claude/
