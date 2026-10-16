@@ -4,7 +4,49 @@ What was actually run in this environment, what it caught, and what's still
 unverified. Written so the next person doesn't have to re-derive any of this from
 scratch or take "it should work" on faith.
 
-## Environment
+## Production-readiness pass (October 2026)
+
+### Environment
+- Windows 10, JDK 25 (JetBrains Runtime; the build targets `--release 21`), Maven 3.9.11
+  via `./mvnw`, Node 24 / npm 11, headless Chrome for UI captures.
+- **No Docker daemon and no PostgreSQL** were available.
+
+### What was run, and the result
+| Check | Result |
+|---|---|
+| `./mvnw clean verify` (JUnit 5 + MockMvc on H2 in PostgreSQL mode; every Flyway migration V1–V71 applied per context) | **347 tests, 0 failures**; jar built |
+| `PostgresMigrationIT` (Testcontainers, PostgreSQL 16) | **Skipped**: no Docker here; runs in CI (`azure-pipelines.yml`) |
+| `npm run lint` (ESLint + typescript-eslint + react-hooks, `--max-warnings=0`, then `tsc`) | clean |
+| `npm test` (Vitest + Testing Library) | **75 tests, 0 failures** |
+| `npm run build` | clean |
+| Upgrade path: V60–V71 applied over an existing database holding data (incl. the V66 Java backfill) | applied cleanly |
+| Live smoke tests against the running app: login, forced password change, token revocation, Master API catalogue/proxy/read-only keys/atomic batch rollback/`{{ref}}`, signed webhook delivery verified with HMAC, duplicate warning + bypass, Idempotency-Key replay and key-reuse 422, forecast, deal health | all as expected |
+| UI: every route captured headlessly at 1440×900 (light + dark) and 390×844 (phone) across 3 review passes, zero browser console errors | reviewed; fixes below |
+
+### Bugs found by this pass and fixed
+- `.input/.select/.btn` component classes were emitted after Tailwind utilities, so
+  `pl-9`, `w-44`, `py-2.5` etc. never applied (icons over placeholders, filter
+  dropdowns stretched full width). Moved into `@layer components`.
+- Backend Dockerfile built on a JDK image without Maven (the image could never build);
+  nginx's 1 MB default body limit broke 25 MB uploads; `azure.blob` config was nested
+  inside the `azure` profile only.
+- Audit snapshots were always null (`new ObjectMapper()` without the Java time module).
+- Partial saves reset fields with entity defaults (deal value/probability, project
+  status, whiteboard positions…); team/department/workspace `active` flags reset.
+- Many authorization gaps (cross-tenant ids, missing permission checks, team-roster
+  privilege escalation) — see the commit history for the full list.
+- Pre-existing deals had no health score until the nightly job → one catch-up run at start-up.
+
+### Still unverified here (needs an environment with Docker / Azure)
+- Flyway + Hibernate against a real PostgreSQL 16 (`PostgresMigrationIT` covers it in CI),
+  including the PostgreSQL-only `FOR UPDATE SKIP LOCKED` claim paths.
+- `docker compose up --build` and the two image builds.
+- Azure Notification Hubs web push, Azure Blob storage, Application Insights and Redis
+  against real services (all are optional and off unless configured; unit-tested with fakes).
+
+## Earlier pass (kept for history)
+
+### Environment
 
 - Windows 10, PowerShell/Git Bash, JDK 17 installed (project targets 21 — see below),
   Maven 3.9.11, Node 20.19.4, npm 11.5.2. No Docker daemon, no reachable PostgreSQL.
