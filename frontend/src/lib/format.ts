@@ -62,7 +62,7 @@ export function roleLabel(role: string | null | undefined): string {
   if (!role) return "—";
   return role
     .split("_")
-    .map((w) => w[0] + w.slice(1).toLowerCase())
+    .map((w) => (w === "VP" ? "VP" : w[0] + w.slice(1).toLowerCase()))
     .join(" ");
 }
 

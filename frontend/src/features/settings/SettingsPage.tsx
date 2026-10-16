@@ -11,9 +11,14 @@ import { Avatar } from "@/components/ui/Avatar";
 import { Field, FieldGrid } from "@/components/ui/Field";
 import { Tabs } from "@/components/ui/Tabs";
 import { AiSettingsTab } from "./AiSettingsTab";
+import { useSearchParams } from "react-router-dom";
 
 export default function SettingsPage() {
-  const [tab, setTab] = useState<"profile" | "ai" | "organization">("profile");
+  const [params] = useSearchParams();
+  const initialTab = params.get("tab");
+  const [tab, setTab] = useState<"profile" | "ai" | "organization">(
+    initialTab === "ai" || initialTab === "organization" ? initialTab : "profile"
+  );
   const user = useAuthStore((s) => s.user);
   const updateUser = useAuthStore((s) => s.updateUser);
   const isAdmin = user?.role === "SUPER_ADMIN";

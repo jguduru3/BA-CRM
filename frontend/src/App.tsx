@@ -37,6 +37,7 @@ const SettingsPage = lazy(() => import("@/features/settings/SettingsPage"));
 const TrashPage = lazy(() => import("@/features/trash/TrashPage"));
 const ChangePasswordPage = lazy(() => import("@/features/auth/ChangePasswordPage"));
 const IntegrationsPage = lazy(() => import("@/features/integrations/IntegrationsPage"));
+const AdminConsolePage = lazy(() => import("@/features/admin/AdminConsolePage"));
 const SequencesPage = lazy(() => import("@/features/sequences/SequencesPage"));
 const NotFoundPage = lazy(() => import("@/features/misc/NotFoundPage"));
 const DuplicatesPage = lazy(() => import("@/features/duplicates/DuplicatesPage"));
@@ -81,6 +82,7 @@ export default function App() {
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/trash" element={<TrashPage />} />
               <Route path="/integrations" element={<IntegrationsPage />} />
+              <Route path="/admin" element={<AdminConsolePage />} />
               <Route path="/sequences" element={<SequencesPage />} />
               <Route path="/duplicates" element={<DuplicatesPage />} />
               <Route path="*" element={<NotFoundPage />} />

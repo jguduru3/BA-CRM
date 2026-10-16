@@ -18,6 +18,7 @@ import {
   MessageCircle,
   Network,
   Plug,
+  ShieldCheck,
   Repeat,
   Settings,
   StickyNote,
@@ -107,6 +108,7 @@ export const NAV_GROUPS: NavGroup[] = [
       // Everyone may view the org structure (backend: DEPARTMENT VIEW = all roles); only Super Admin edits it.
       { to: "/departments", label: "Departments", icon: Network },
       { to: "/audit-log", label: "Audit Log", icon: History, minRole: AUDIT_ROLES },
+      { to: "/admin", label: "Admin console", icon: ShieldCheck, minRole: ADMIN_ONLY },
       { to: "/integrations", label: "Integrations", icon: Plug, minRole: ADMIN_ONLY },
     ],
   },

@@ -104,6 +104,9 @@ public class AuthController {
         if (!passwordEncoder.matches(req.password(), user.getPassword())) {
             int failures = user.getFailedLoginCount() + 1;
             user.setFailedLoginCount(failures);
+            // Recorded for the admin console's security view (known accounts only — an
+            // unknown email has no organization to attribute it to).
+            audit(user, "login_failed", ip, http);
             if (failures >= maxFailures) {
                 user.setLockedUntil(now.plus(lockDuration));
                 user.setFailedLoginCount(0);
