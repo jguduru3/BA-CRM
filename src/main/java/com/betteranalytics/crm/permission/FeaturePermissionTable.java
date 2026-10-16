@@ -338,6 +338,13 @@ final class FeaturePermissionTable {
 
         // INTEGRATION — API keys / webhooks: Super Admin only.
         for (Action a : Action.values()) rule(Scope.ORG, a, ResourceType.INTEGRATION, Role.SUPER_ADMIN);
+
+        // SEQUENCE — everyone sees sequences (reps enroll their records: that is gated by
+        // EDIT on the Lead/Contact itself); building and managing them is Manager+.
+        rule(Scope.ORG, Action.VIEW, ResourceType.SEQUENCE, everyone);
+        rule(Scope.ORG, Action.CREATE, ResourceType.SEQUENCE, managerUp);
+        rule(Scope.ORG, Action.EDIT, ResourceType.SEQUENCE, managerUp);
+        rule(Scope.ORG, Action.DELETE, ResourceType.SEQUENCE, managerUp);
     }
 
     /**

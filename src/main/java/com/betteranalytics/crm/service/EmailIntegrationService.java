@@ -1,6 +1,8 @@
 package com.betteranalytics.crm.service;
 
 import com.betteranalytics.crm.entity.EmailAccount;
+import com.betteranalytics.crm.sequences.InboundEmailClassifier;
+import com.betteranalytics.crm.sequences.SequenceSignals;
 import com.betteranalytics.crm.security.UrlSafety;
 import jakarta.mail.*;
 import jakarta.mail.internet.AddressException;
@@ -8,6 +10,8 @@ import jakarta.mail.internet.InternetAddress;
 import jakarta.mail.internet.MimeMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.mail.javamail.JavaMailSenderImpl;
 import org.springframework.stereotype.Service;
 
@@ -32,6 +36,10 @@ public class EmailIntegrationService {
     public static final Set<Integer> SMTP_PORTS = Set.of(25, 465, 587, 2525);
     public static final Set<Integer> IMAP_PORTS = Set.of(143, 993);
     public static final int MAX_READ_LIMIT = 50;
+
+    /** Messages seen on the IMAP read path are published for sequences (reply exit, bounce skip). */
+    @Autowired(required = false)
+    private ApplicationEventPublisher events;
     private static final String TIMEOUT_MS = "10000";
     private static final Pattern HOSTNAME = Pattern.compile("^[A-Za-z0-9.-]{1,253}$");
     private static final Pattern FOLDER = Pattern.compile("^[\\p{L}\\p{N} ._/\\-\\[\\]]{1,100}$");
@@ -96,7 +104,7 @@ public class EmailIntegrationService {
             log.info("Email sent from account {} to {}", account.getId(), recipient.getAddress());
         } catch (Exception e) {
             log.warn("SMTP send failed for account {}: {}", account.getId(), e.toString());
-            throw new IllegalStateException("Failed to send email via the configured SMTP account");
+            throw new IllegalStateException("Failed to send email via the configured SMTP account", e);
         }
     }
 
@@ -125,6 +133,7 @@ public class EmailIntegrationService {
         props.setProperty("mail." + protocol + ".writetimeout", TIMEOUT_MS);
 
         List<Map<String, Object>> results = new ArrayList<>();
+        List<SequenceSignals.InboundEmail> signals = new ArrayList<>();
         Store store = null;
         Folder folder = null;
         try {
@@ -155,6 +164,9 @@ public class EmailIntegrationService {
                         email.put("body", "[unreadable]");
                     }
                     results.add(email);
+                    SequenceSignals.InboundEmail signal = InboundEmailClassifier.classify(account.getOrganizationId(), m);
+                    if (signal != null && signal.fromAddress() != null
+                            && !signal.fromAddress().equalsIgnoreCase(account.getEmailAddress())) signals.add(signal);
                 }
             }
         } catch (IllegalArgumentException e) {
@@ -168,6 +180,12 @@ public class EmailIntegrationService {
             }
             if (store != null) {
                 try { store.close(); } catch (Exception ignored) {}
+            }
+        }
+        if (events != null) {
+            for (SequenceSignals.InboundEmail signal : signals) {
+                try { events.publishEvent(signal); }
+                catch (Exception e) { log.warn("Inbound email listener failed: {}", e.toString()); }
             }
         }
         return results;
