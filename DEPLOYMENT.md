@@ -53,6 +53,15 @@ via ShedLock.
 | `AZURE_KEYVAULT_URI` | — | Reserved; secrets are injected as env vars via Key Vault references (§3). |
 | `WHATSAPP_APP_SECRET` | — | Meta App Secret — required to verify inbound WhatsApp webhooks. |
 | `WHATSAPP_GRAPH_URL` | `https://graph.facebook.com/v19.0` | Meta Graph API base. |
+| `APP_PUBLIC_BASE_URL` | — | Public origin users reach the app on (e.g. `https://crm.example.com`). Used for one-click email unsubscribe links; blank = campaign emails offer a `mailto:` unsubscribe only. |
+| `CAMPAIGN_EMAIL_PER_MINUTE` | `60` | Max campaign emails per minute per sending mailbox (per api replica). `0` = unthrottled. Keep below your mail provider's limit. |
+| `CAMPAIGN_SMS_PER_MINUTE` | `60` | Max campaign SMS per minute (per api replica). |
+| `AZURE_COMMUNICATION_CONNECTION_STRING` | — | Azure Communication Services connection string (`endpoint=https://<res>.communication.azure.com/;accesskey=<base64>`). With `AZURE_SMS_FROM` enables SMS campaigns; blank = SMS disabled (launch returns 409 "SMS is not configured"). |
+| `AZURE_SMS_FROM` | — | The ACS phone number SMS are sent from, E.164 (`+18005550100`). |
+| `AZURE_SMS_EVENTS_SECRET` | — | Shared secret for the Event Grid webhook `POST /api/sms/events?secret=…` (inbound STOP/START). Blank = endpoint disabled (404). |
+| `EMAIL_INBOX_POLL_ENABLED` | `true` | Scheduled IMAP polling of mailboxes with "Watch inbox for replies". |
+| `EMAIL_INBOX_POLL_DELAY_MS` | `300000` | Pause between inbox polls (one replica at a time via ShedLock). |
+| `EMAIL_INBOX_POLL_BATCH` | `50` | Max new messages read per mailbox per poll (the rest are read on the next poll). |
 | `AZURE_NOTIFICATION_HUB_CONNECTION_STRING` | — | Web push via Azure Notification Hubs (DefaultFullSharedAccessSignature connection string). Blank disables push. |
 | `AZURE_NOTIFICATION_HUB_NAME` | — | Notification Hub name. |
 | `WEBPUSH_VAPID_PUBLIC_KEY` | — | Public VAPID key configured on the hub under *Browser (Web Push)*; served to browsers at runtime via `/api/notifications/push-status`. |
@@ -115,6 +124,38 @@ for the web image: `API_UPSTREAM` (e.g. `http://crm-api` in Azure Container Apps
 Health endpoints expose only `{"status":"UP"}` — no components, no details
 (`management.endpoint.health.show-details=never`, `show-components=never`); only
 `health` and `info` are exposed over HTTP.
+
+---
+
+## 3a. Messaging channels (email, SMS)
+
+**Email campaigns and sequences** send through mailboxes connected under
+*Settings → Email accounts* (SMTP; the password is encrypted with `ENCRYPTION_KEY`).
+Every campaign email is plain text with a `List-Unsubscribe` header and an
+unsubscribe line; set `APP_PUBLIC_BASE_URL` so the header carries a signed
+one-click link (`/api/email/unsubscribe`, public, RFC 8058) — the web container
+must proxy `/api` publicly (it does by default). Opt-outs are stored per
+organization in `email_consent` and honoured by campaigns and sequences.
+Use a mailbox / provider meant for bulk mail and set `CAMPAIGN_EMAIL_PER_MINUTE`
+to its limit (Microsoft 365: ~30/min per mailbox; Gmail Workspace: ~2000/day).
+
+**Inbox watching**: tick *Watch inbox for replies* on a mailbox (needs an IMAP host).
+Every `EMAIL_INBOX_POLL_DELAY_MS` the api reads new INBOX messages (read-only,
+UID-based): replies stop sequences and are logged as email activities on the
+lead/contact, bounces skip later sequence emails, "unsubscribe" replies opt the
+sender out. The first poll only records the current position (no history replay).
+
+**SMS (Azure Communication Services)**:
+1. Create a Communication Services resource, buy/verify a phone number with SMS
+   capability (toll-free numbers need verification before sending in the US).
+2. Set `AZURE_COMMUNICATION_CONNECTION_STRING` (resource → Keys) and `AZURE_SMS_FROM`
+   as Key Vault-backed secrets. The Admin console *System* tab shows "SMS … Configured".
+3. Inbound STOP/START: ACS delivers inbound SMS only through **Event Grid**. Create an
+   Event Grid subscription on the ACS resource for `Microsoft.Communication.SMSReceived`
+   with a Webhook endpoint `https://<public host>/api/sms/events?secret=<AZURE_SMS_EVENTS_SECRET>`
+   (Event Grid schema). The subscription handshake is answered automatically. Without
+   it, STOP replies are not seen and opt-outs must be recorded manually
+   (they share the WhatsApp consent store, `POST /api/whatsapp/consent`).
 
 ---
 
@@ -242,6 +283,9 @@ Full guide, with signature verification code: [docs/MASTER_API.md](docs/MASTER_A
 - [ ] `CORS_ALLOWED_ORIGINS` empty unless a separate browser origin really needs it.
 - [ ] `OUTBOUND_ALLOW_PRIVATE_NETWORKS` is `false`.
 - [ ] `WHATSAPP_APP_SECRET` set if WhatsApp is used.
+- [ ] `APP_PUBLIC_BASE_URL` set to the public origin (one-click email unsubscribe); a test campaign email shows a working unsubscribe link.
+- [ ] `CAMPAIGN_EMAIL_PER_MINUTE` at or below the mail provider's sending limit.
+- [ ] SMS used → `AZURE_COMMUNICATION_CONNECTION_STRING` + `AZURE_SMS_FROM` set and the Event Grid `SMSReceived` subscription to `/api/sms/events?secret=…` created.
 - [ ] HTTPS only at the edge (Container Apps ingress / custom domain with a managed certificate).
 - [ ] `crm-api` has internal ingress only; Postgres and Redis are not publicly reachable.
 - [ ] Liveness/readiness probes configured; Application Insights receiving data.

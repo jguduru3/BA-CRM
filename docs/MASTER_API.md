@@ -365,3 +365,28 @@ Rules:
   `413 IDEMPOTENCY_BODY_TOO_LARGE` when they carry a key. Responses that are not text, or that are larger than 1 MB, are not stored, so
   retrying them runs the request again. `GET`, `PUT` and `DELETE` ignore the
   header, because they are already idempotent by definition.
+
+---
+
+## 10. Messaging endpoints (web app API)
+
+Added with real email / SMS campaign dispatch (authenticated with a user token
+unless marked public):
+
+| Method & path | Purpose |
+|---|---|
+| `GET /api/campaigns/channels` | `{whatsapp, email, sms: {configured, detail[, from]}, emailPerMinute}` — which channels can send. |
+| `POST /api/campaigns` / `PUT /api/campaigns/{id}` | New fields `emailAccountId`, `emailSubject`, `emailBody` (email); `messageBody` is the SMS text for `type: "sms"` (max 1600). |
+| `POST /api/campaigns/{id}/contacts` | Entries may carry `email` (email campaigns dedupe on the lowercase address); `relatedType`/`relatedId` without an address uses the record's phone / email. |
+| `POST /api/campaigns/{id}/audience/preview` | Adds `channelField`, `withoutEmail`, per-row `email` / `validEmail`. |
+| `POST /api/campaigns/{id}/launch` | 409 `SMS is not configured` / `No active email account for this campaign` when the channel can't send. |
+| `GET /api/email/consent?email=` · `POST /api/email/consent` `{email,status,reason}` | Email opt-out state + history; manual opt-in/out. |
+| `GET` / `POST /api/email/unsubscribe?t=<signed token>` | **Public.** Confirmation page / one-click unsubscribe (RFC 8058). |
+| `POST /api/sms/events?secret=…` | **Public**, shared secret. Azure Event Grid webhook (SubscriptionValidation + `Microsoft.Communication.SMSReceived` STOP/START). |
+| `PATCH /api/ai-automations/email-accounts/{id}` `{pollInbox}` | Turn "Watch inbox for replies" on/off (Super Admin / VP Sales). |
+
+Campaign recipient rows now include `email` / `emailNormalized`; `waMessageId`
+holds the provider message id for every channel (WhatsApp wamid, email
+Message-ID, ACS message id). AI automations accept `"saveToRecord": true|false`
+in `actionConfigJson` (default true: output saved as a Note on the run's record).
+
