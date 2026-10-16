@@ -2,7 +2,6 @@ package com.betteranalytics.crm.service;
 
 import com.betteranalytics.crm.entity.DeviceToken;
 import com.betteranalytics.crm.repository.DeviceTokenRepository;
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -10,6 +9,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
@@ -17,239 +18,229 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
-import java.security.KeyFactory;
-import java.security.PrivateKey;
-import java.security.Signature;
-import java.security.spec.PKCS8EncodedKeySpec;
+import java.security.MessageDigest;
 import java.time.Clock;
 import java.time.Duration;
-import java.time.Instant;
 import java.util.*;
 
 /**
- * Firebase Cloud Messaging over the HTTP v1 API (the legacy /fcm/send API is shut down).
+ * Web push through <b>Azure Notification Hubs</b> (no Firebase / Google services).
  *
- *   POST https://fcm.googleapis.com/v1/projects/{projectId}/messages:send
- *   Authorization: Bearer <OAuth2 access token>
+ * How it fits together:
+ *  - The browser subscribes with the standard Push API using the hub's VAPID
+ *    public key and sends its PushSubscription (endpoint + p256dh + auth) to
+ *    POST /api/notifications/device-tokens.
+ *  - We register it as a hub <i>installation</i> (platform "browser") tagged
+ *    {@code user:<id>}; the hub stores the keys and encrypts each payload.
+ *  - A notification is sent once per user to the tag — the hub fans out to all
+ *    of that user's browsers and drops endpoints the push service reports as gone.
  *
- * The access token comes from a Google service account (env FCM_SERVICE_ACCOUNT_JSON,
- * raw JSON or base64 of it): we sign a JWT (RS256, java.security only — no SDK) and
- * exchange it at https://oauth2.googleapis.com/token, caching the token until shortly
- * before it expires. When FCM answers UNREGISTERED or INVALID_ARGUMENT for a device
- * token, that token is deleted. Without configuration every method is a no-op.
- *
- * Callers (NotificationService) invoke this after commit on a background thread;
- * every HTTP call has a 5s connect / 10s request timeout. Tokens are never logged.
+ * Configuration: AZURE_NOTIFICATION_HUB_CONNECTION_STRING (a DefaultFullSharedAccessSignature
+ * connection string) + AZURE_NOTIFICATION_HUB_NAME, and WEBPUSH_VAPID_PUBLIC_KEY (the
+ * public half of the VAPID key pair configured on the hub under "Browser (Web Push)").
+ * Without them every method is a no-op. Auth is a SAS token signed with the JDK
+ * (HMAC-SHA256) — no SDK. Calls have 5 s connect / 10 s request timeouts, never throw
+ * to callers, and never log subscription endpoints.
  */
 @Service
 public class PushService {
 
     private static final Logger log = LoggerFactory.getLogger(PushService.class);
-    static final String SCOPE = "https://www.googleapis.com/auth/firebase.messaging";
-    static final String DEFAULT_TOKEN_URI = "https://oauth2.googleapis.com/token";
-    static final String SEND_URL = "https://fcm.googleapis.com/v1/projects/%s/messages:send";
-    private static final Set<String> DEAD_TOKEN_CODES = Set.of("UNREGISTERED", "INVALID_ARGUMENT");
+    static final String API_VERSION = "2020-06";
+    private static final long SAS_TTL_SECONDS = 3600;
 
-    /** Minimal HTTP seam so the token-cleanup logic is unit-testable. */
+    /** Minimal HTTP seam so the hub calls are unit-testable without a network. */
     public interface Transport {
-        Response post(String url, Map<String, String> headers, byte[] body) throws IOException, InterruptedException;
+        Response send(String method, String url, Map<String, String> headers, byte[] body)
+                throws IOException, InterruptedException;
     }
 
     public record Response(int status, String body) {}
 
-    public record ServiceAccount(String projectId, String clientEmail, PrivateKey privateKey, String tokenUri) {}
+    /** Parsed hub connection settings. */
+    public record HubConfig(String namespaceHost, String hubName, String keyName, String key) {
+        String baseUrl() {
+            return "https://" + namespaceHost + "/" + hubName;
+        }
+    }
 
-    public enum Result { SENT, TOKEN_DELETED, FAILED }
+    public enum Result { SENT, FAILED, DISABLED }
 
     private final DeviceTokenRepository tokenRepo;
     private final ObjectMapper objectMapper;
-    private final ServiceAccount account;
+    private final HubConfig hub;
+    private final String vapidPublicKey;
     private final Transport transport;
     private final Clock clock;
 
-    private String cachedToken;
-    private Instant cachedTokenExpiry = Instant.EPOCH;
-
     @Autowired
     public PushService(DeviceTokenRepository tokenRepo, ObjectMapper objectMapper,
-                       @Value("${app.fcm.service-account-json:}") String serviceAccountJson,
-                       @Value("${app.fcm.server-key:}") String legacyServerKey) {
-        this(tokenRepo, objectMapper, parseServiceAccount(serviceAccountJson, objectMapper), jdkTransport(), Clock.systemUTC());
-        if (legacyServerKey != null && !legacyServerKey.isBlank()) {
-            log.warn("FCM_SERVER_KEY is set but the FCM legacy API is shut down — it is ignored. "
-                    + "Configure FCM_SERVICE_ACCOUNT_JSON for the HTTP v1 API instead.");
-        }
-        log.info("Push notifications (FCM HTTP v1): {}", account != null ? "enabled for project " + account.projectId() : "disabled");
+                       @Value("${app.push.azure-hub.connection-string:}") String connectionString,
+                       @Value("${app.push.azure-hub.name:}") String hubName,
+                       @Value("${app.push.vapid-public-key:}") String vapidPublicKey) {
+        this(tokenRepo, objectMapper, parseConnectionString(connectionString, hubName),
+                vapidPublicKey, jdkTransport(), Clock.systemUTC());
+        log.info("Push notifications (Azure Notification Hubs): {}",
+                isEnabled() ? "enabled for hub " + hub.hubName() : "disabled");
     }
 
-    PushService(DeviceTokenRepository tokenRepo, ObjectMapper objectMapper, ServiceAccount account,
-                Transport transport, Clock clock) {
+    PushService(DeviceTokenRepository tokenRepo, ObjectMapper objectMapper, HubConfig hub,
+                String vapidPublicKey, Transport transport, Clock clock) {
         this.tokenRepo = tokenRepo;
         this.objectMapper = objectMapper;
-        this.account = account;
+        this.hub = hub;
+        this.vapidPublicKey = vapidPublicKey == null ? "" : vapidPublicKey.trim();
         this.transport = transport;
         this.clock = clock;
     }
 
+    /** Push works only when the hub is configured and the browser can get the VAPID key. */
     public boolean isEnabled() {
-        return account != null;
+        return hub != null && !vapidPublicKey.isEmpty();
     }
 
-    /** Pushes to every active device of the user. Never throws. */
-    public void sendToUser(Long userId, String title, String body, Map<String, String> data) {
-        if (!isEnabled() || userId == null) return;
-        List<DeviceToken> tokens;
+    public String vapidPublicKey() {
+        return isEnabled() ? vapidPublicKey : null;
+    }
+
+    /** Stable installation id for a browser subscription (never exposes the endpoint itself). */
+    public static String installationIdFor(String endpoint) {
         try {
-            tokens = tokenRepo.findByUserId(userId);
+            byte[] d = MessageDigest.getInstance("SHA-256").digest(endpoint.getBytes(StandardCharsets.UTF_8));
+            return "web-" + HexFormat.of().formatHex(d, 0, 16);
         } catch (Exception e) {
-            log.warn("Push skipped for userId={}: could not load device tokens ({})", userId, e.getClass().getSimpleName());
-            return;
-        }
-        for (DeviceToken dt : tokens) {
-            if (!dt.isActive()) continue;
-            sendToDevice(dt, title, body, data);
+            throw new IllegalStateException(e);
         }
     }
 
-    /** One device. Dead tokens (UNREGISTERED / INVALID_ARGUMENT) are deleted. */
-    public Result sendToDevice(DeviceToken dt, String title, String body, Map<String, String> data) {
-        if (!isEnabled()) return Result.FAILED;
+    public static String userTag(Long userId) {
+        return "user:" + userId;
+    }
+
+    /** Creates or replaces the hub installation for a browser subscription. */
+    public Result upsertBrowserInstallation(String installationId, Long userId,
+                                            String endpoint, String p256dh, String auth) {
+        if (!isEnabled()) return Result.DISABLED;
         try {
-            byte[] payload = objectMapper.writeValueAsBytes(message(dt.getToken(), title, body, data));
-            Response r = postMessage(payload, false);
-            if (r.status() == 401) {            // token revoked/expired early — refresh once
-                r = postMessage(payload, true);
-            }
+            Map<String, Object> pushChannel = new LinkedHashMap<>();
+            pushChannel.put("endpoint", endpoint);
+            pushChannel.put("p256dh", p256dh);
+            pushChannel.put("auth", auth);
+            Map<String, Object> installation = new LinkedHashMap<>();
+            installation.put("installationId", installationId);
+            installation.put("platform", "browser");
+            installation.put("pushChannel", pushChannel);
+            installation.put("tags", List.of(userTag(userId)));
+            byte[] body = objectMapper.writeValueAsBytes(installation);
+
+            String url = hub.baseUrl() + "/installations/" + enc(installationId) + "?api-version=" + API_VERSION;
+            Response r = transport.send("PUT", url, headers("application/json", null), body);
             if (r.status() >= 200 && r.status() < 300) return Result.SENT;
-            String code = errorCode(r.body());
-            if (code != null && DEAD_TOKEN_CODES.contains(code)) {
-                tokenRepo.deleteById(dt.getId());
-                log.info("Deleted FCM device token id={} (FCM: {})", dt.getId(), code);
-                return Result.TOKEN_DELETED;
-            }
-            log.warn("FCM push failed for deviceTokenId={}: HTTP {} {}", dt.getId(), r.status(), code != null ? code : "");
+            log.warn("Notification Hub rejected installation (HTTP {})", r.status());
             return Result.FAILED;
-        } catch (InterruptedException ie) {
+        } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return Result.FAILED;
         } catch (Exception e) {
-            log.warn("FCM push failed for deviceTokenId={}: {}", dt.getId(), e.getClass().getSimpleName());
+            log.warn("Notification Hub installation failed: {}", e.getClass().getSimpleName());
             return Result.FAILED;
         }
     }
 
-    private Response postMessage(byte[] payload, boolean forceNewToken) throws IOException, InterruptedException {
-        String accessToken = accessToken(forceNewToken);
-        Map<String, String> headers = Map.of(
-                "Authorization", "Bearer " + accessToken,
-                "Content-Type", "application/json; charset=UTF-8");
-        return transport.post(String.format(SEND_URL, account.projectId()), headers, payload);
-    }
-
-    private Map<String, Object> message(String token, String title, String body, Map<String, String> data) {
-        Map<String, Object> notification = new LinkedHashMap<>();
-        notification.put("title", title != null ? truncate(title, 200) : "");
-        notification.put("body", body != null ? truncate(body, 500) : "");
-        Map<String, Object> msg = new LinkedHashMap<>();
-        msg.put("token", token);
-        msg.put("notification", notification);
-        if (data != null && !data.isEmpty()) {
-            Map<String, String> clean = new LinkedHashMap<>();
-            data.forEach((k, v) -> { if (k != null && v != null) clean.put(k, truncate(v, 500)); });
-            msg.put("data", clean);
-        }
-        return Map.of("message", msg);
-    }
-
-    /** FCM error code: details[].errorCode (FcmError) first, then error.status. */
-    String errorCode(String body) {
-        if (body == null || body.isBlank()) return null;
+    public Result deleteInstallation(String installationId) {
+        if (!isEnabled() || installationId == null) return Result.DISABLED;
         try {
-            JsonNode err = objectMapper.readTree(body).path("error");
-            for (JsonNode d : err.path("details")) {
-                String c = d.path("errorCode").asText(null);
-                if (c != null && !c.isBlank()) return c;
-            }
-            String status = err.path("status").asText(null);
-            return status == null || status.isBlank() ? null : status;
+            String url = hub.baseUrl() + "/installations/" + enc(installationId) + "?api-version=" + API_VERSION;
+            Response r = transport.send("DELETE", url, headers(null, null), null);
+            // 404 = already gone; both are fine.
+            return (r.status() >= 200 && r.status() < 300) || r.status() == 404 ? Result.SENT : Result.FAILED;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return Result.FAILED;
         } catch (Exception e) {
+            return Result.FAILED;
+        }
+    }
+
+    /**
+     * Sends one notification to every browser of the user (hub tag fan-out). Never throws.
+     * The JSON payload is what the service worker's "push" handler receives.
+     */
+    public Result sendToUser(Long userId, String title, String body, Map<String, String> data) {
+        if (!isEnabled() || userId == null) return Result.DISABLED;
+        try {
+            if (!tokenRepo.existsByUserIdAndActiveTrue(userId)) return Result.DISABLED;
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("title", title == null ? "Better CRM" : title);
+            payload.put("body", body == null ? "" : body);
+            payload.put("data", data == null ? Map.of() : data);
+            byte[] bytes = objectMapper.writeValueAsBytes(payload);
+
+            Map<String, String> h = headers("application/json;charset=utf-8", userTag(userId));
+            h.put("ServiceBusNotification-Format", "browser");
+            Response r = transport.send("POST", hub.baseUrl() + "/messages/?api-version=" + API_VERSION, h, bytes);
+            if (r.status() >= 200 && r.status() < 300) return Result.SENT;
+            log.warn("Notification Hub send failed for userId={} (HTTP {})", userId, r.status());
+            return Result.FAILED;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return Result.FAILED;
+        } catch (Exception e) {
+            log.warn("Notification Hub send failed for userId={}: {}", userId, e.getClass().getSimpleName());
+            return Result.FAILED;
+        }
+    }
+
+    // ── SAS auth ─────────────────────────────────────────────────────────────
+
+    private Map<String, String> headers(String contentType, String tags) {
+        Map<String, String> h = new LinkedHashMap<>();
+        h.put("Authorization", sasToken());
+        if (contentType != null) h.put("Content-Type", contentType);
+        if (tags != null) h.put("ServiceBusNotification-Tags", tags);
+        return h;
+    }
+
+    /** SharedAccessSignature sr=<uri>&sig=<HMAC-SHA256(key, uri + "\n" + expiry)>&se=<expiry>&skn=<keyName>. */
+    String sasToken() {
+        String resource = enc(hub.baseUrl().toLowerCase(Locale.ROOT));
+        long expiry = clock.instant().getEpochSecond() + SAS_TTL_SECONDS;
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(hub.key().getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+            String sig = Base64.getEncoder().encodeToString(
+                    mac.doFinal((resource + "\n" + expiry).getBytes(StandardCharsets.UTF_8)));
+            return "SharedAccessSignature sr=" + resource + "&sig=" + enc(sig) + "&se=" + expiry + "&skn=" + hub.keyName();
+        } catch (Exception e) {
+            throw new IllegalStateException("could not sign Notification Hub SAS token", e);
+        }
+    }
+
+    /** Parses "Endpoint=sb://ns.servicebus.windows.net/;SharedAccessKeyName=...;SharedAccessKey=...". */
+    static HubConfig parseConnectionString(String cs, String hubName) {
+        if (cs == null || cs.isBlank() || hubName == null || hubName.isBlank()) return null;
+        Map<String, String> parts = new HashMap<>();
+        for (String seg : cs.trim().split(";")) {
+            int i = seg.indexOf('=');
+            if (i > 0) parts.put(seg.substring(0, i).trim().toLowerCase(Locale.ROOT), seg.substring(i + 1).trim());
+        }
+        String endpoint = parts.get("endpoint");
+        String keyName = parts.get("sharedaccesskeyname");
+        String key = parts.get("sharedaccesskey");
+        if (endpoint == null || keyName == null || key == null) {
+            log.warn("AZURE_NOTIFICATION_HUB_CONNECTION_STRING is malformed — push disabled");
             return null;
         }
-    }
-
-    // ── OAuth2: service-account JWT → access token (cached) ─────────────────────
-
-    synchronized String accessToken(boolean forceNew) throws IOException, InterruptedException {
-        Instant now = clock.instant();
-        if (!forceNew && cachedToken != null && now.isBefore(cachedTokenExpiry)) return cachedToken;
-
-        String assertion = signedJwt(now);
-        String form = "grant_type=" + URLEncoder.encode("urn:ietf:params:oauth:grant-type:jwt-bearer", StandardCharsets.UTF_8)
-                + "&assertion=" + URLEncoder.encode(assertion, StandardCharsets.UTF_8);
-        Response r = transport.post(account.tokenUri(),
-                Map.of("Content-Type", "application/x-www-form-urlencoded"), form.getBytes(StandardCharsets.UTF_8));
-        if (r.status() < 200 || r.status() >= 300) {
-            throw new IOException("OAuth token exchange failed: HTTP " + r.status());
-        }
-        JsonNode json = objectMapper.readTree(r.body());
-        String token = json.path("access_token").asText(null);
-        if (token == null || token.isBlank()) throw new IOException("OAuth token exchange returned no access_token");
-        long expiresIn = json.path("expires_in").asLong(3600);
-        cachedToken = token;
-        cachedTokenExpiry = now.plusSeconds(Math.max(60, expiresIn - 120));   // refresh 2 min early
-        return token;
-    }
-
-    String signedJwt(Instant now) {
-        try {
-            Base64.Encoder b64 = Base64.getUrlEncoder().withoutPadding();
-            String header = b64.encodeToString("{\"alg\":\"RS256\",\"typ\":\"JWT\"}".getBytes(StandardCharsets.UTF_8));
-            Map<String, Object> claims = new LinkedHashMap<>();
-            claims.put("iss", account.clientEmail());
-            claims.put("scope", SCOPE);
-            claims.put("aud", account.tokenUri());
-            claims.put("iat", now.getEpochSecond());
-            claims.put("exp", now.plus(Duration.ofHours(1)).getEpochSecond());
-            String payload = b64.encodeToString(objectMapper.writeValueAsBytes(claims));
-            Signature sig = Signature.getInstance("SHA256withRSA");
-            sig.initSign(account.privateKey());
-            sig.update((header + "." + payload).getBytes(StandardCharsets.US_ASCII));
-            return header + "." + payload + "." + b64.encodeToString(sig.sign());
-        } catch (Exception e) {
-            throw new IllegalStateException("Could not sign the FCM service-account JWT", e);
-        }
-    }
-
-    // ── Configuration ──────────────────────────────────────────────────────────
-
-    /** Raw JSON or base64(JSON) of a Google service-account key file; blank/invalid → null (disabled). */
-    static ServiceAccount parseServiceAccount(String raw, ObjectMapper om) {
-        if (raw == null || raw.isBlank()) return null;
-        try {
-            String json = raw.trim();
-            if (!json.startsWith("{")) json = new String(Base64.getMimeDecoder().decode(json), StandardCharsets.UTF_8);
-            JsonNode n = om.readTree(json);
-            String projectId = n.path("project_id").asText(null);
-            String email = n.path("client_email").asText(null);
-            String pem = n.path("private_key").asText(null);
-            String tokenUri = n.path("token_uri").asText(DEFAULT_TOKEN_URI);
-            if (projectId == null || email == null || pem == null) {
-                log.warn("FCM_SERVICE_ACCOUNT_JSON is missing project_id / client_email / private_key — push disabled");
-                return null;
-            }
-            if (!tokenUri.startsWith("https://")) tokenUri = DEFAULT_TOKEN_URI;
-            return new ServiceAccount(projectId, email, privateKey(pem), tokenUri);
-        } catch (Exception e) {
-            log.warn("FCM_SERVICE_ACCOUNT_JSON could not be parsed ({}) — push disabled", e.getClass().getSimpleName());
+        String host = URI.create(endpoint.replaceFirst("^sb://", "https://")).getHost();
+        if (host == null) {
+            log.warn("AZURE_NOTIFICATION_HUB_CONNECTION_STRING has no endpoint host — push disabled");
             return null;
         }
+        return new HubConfig(host, hubName.trim(), keyName, key);
     }
 
-    static PrivateKey privateKey(String pem) throws Exception {
-        String b64 = pem.replace("-----BEGIN PRIVATE KEY-----", "")
-                .replace("-----END PRIVATE KEY-----", "")
-                .replaceAll("\\s", "");
-        return KeyFactory.getInstance("RSA").generatePrivate(new PKCS8EncodedKeySpec(Base64.getDecoder().decode(b64)));
+    private static String enc(String s) {
+        return URLEncoder.encode(s, StandardCharsets.UTF_8);
     }
 
     private static Transport jdkTransport() {
@@ -257,17 +248,12 @@ public class PushService {
                 .connectTimeout(Duration.ofSeconds(5))
                 .followRedirects(HttpClient.Redirect.NEVER)
                 .build();
-        return (url, headers, body) -> {
-            HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(url))
-                    .timeout(Duration.ofSeconds(10))
-                    .POST(HttpRequest.BodyPublishers.ofByteArray(body));
+        return (method, url, headers, body) -> {
+            HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(10));
             headers.forEach(b::header);
-            HttpResponse<String> resp = client.send(b.build(), HttpResponse.BodyHandlers.ofString());
-            return new Response(resp.statusCode(), resp.body());
+            b.method(method, body == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofByteArray(body));
+            HttpResponse<String> r = client.send(b.build(), HttpResponse.BodyHandlers.ofString());
+            return new Response(r.statusCode(), r.body());
         };
-    }
-
-    private static String truncate(String s, int max) {
-        return s.length() <= max ? s : s.substring(0, max);
     }
 }

@@ -21,7 +21,7 @@ import java.util.stream.Collectors;
 /**
  * Executes AI automation jobs (score_lead, draft_message, summarize, next_action)
  * synchronously against OpenAI or Anthropic, using the org's stored API key.
- * Each invocation persists an ai_jobs row and fires an FCM push on completion.
+ * Each invocation persists an ai_jobs row and sends a web push (Azure Notification Hubs) on completion.
  */
 @Service
 public class AiService {

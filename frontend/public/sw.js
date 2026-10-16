@@ -96,3 +96,45 @@ self.addEventListener("fetch", (event) => {
     )
   );
 });
+
+// ── Web push (Azure Notification Hubs delivers the payload sent by the API) ──
+// Payload: {"title": "...", "body": "...", "data": {"relatedType": "Lead", "relatedId": "42", ...}}
+self.addEventListener("push", (event) => {
+  let payload = {};
+  try {
+    payload = event.data ? event.data.json() : {};
+  } catch {
+    payload = { body: event.data ? event.data.text() : "" };
+  }
+  const title = payload.title || "Better CRM";
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body: payload.body || "",
+      icon: "/icon-192.png",
+      badge: "/favicon-32.png",
+      data: payload.data || {},
+      tag: payload.data && payload.data.notificationId ? `n-${payload.data.notificationId}` : undefined,
+    })
+  );
+});
+
+const RELATED_ROUTES = { Lead: "/leads", Opportunity: "/opportunities", Contact: "/contacts", Company: "/companies", Task: "/tasks" };
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const data = event.notification.data || {};
+  const base = RELATED_ROUTES[data.relatedType];
+  // Only ever navigate within this app — never to a URL taken from the payload.
+  const target = base && /^\d+$/.test(String(data.relatedId || "")) ? `${base}?open=${data.relatedId}` : "/";
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((wins) => {
+      for (const w of wins) {
+        if (new URL(w.url).origin === self.location.origin) {
+          w.navigate(target);
+          return w.focus();
+        }
+      }
+      return self.clients.openWindow(target);
+    })
+  );
+});

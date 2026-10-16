@@ -27,15 +27,14 @@ import java.util.Set;
  * POST   /api/notifications/read-all              — mark all read
  * PATCH  /api/notifications/{id}                  — mark single read
  * GET    /api/notifications/unread-count          — badge count
- * POST   /api/notifications/device-tokens         — register FCM token
- * DELETE /api/notifications/device-tokens/{token} — remove FCM token
+ * POST   /api/notifications/device-tokens         — register this browser for web push
+ * DELETE /api/notifications/device-tokens/{token} — unregister it (token = installation id)
  */
 @RestController
 @RequestMapping("/api/notifications")
 public class NotificationController {
 
-    private static final Set<String> PLATFORMS = Set.of("android", "ios", "web");
-    private static final int MAX_TOKEN_LENGTH = 500;
+    private static final int MAX_ENDPOINT_LENGTH = 1000;
 
     private final AppNotificationRepository notifRepo;
     private final DeviceTokenRepository     tokenRepo;
@@ -62,11 +61,19 @@ public class NotificationController {
         return actor;
     }
 
-    /** Whether server-side push (FCM HTTP v1) is configured — the client registers tokens only then. */
+    /**
+     * Whether web push (Azure Notification Hubs) is configured, plus the VAPID public
+     * key the browser needs to subscribe — served at runtime so the SPA build stays
+     * environment-independent. The client subscribes only when enabled.
+     */
     @GetMapping("/push-status")
     public ResponseEntity<Map<String, Object>> pushStatus() {
         actor(Action.VIEW);
-        return ResponseEntity.ok(Map.of("enabled", pushService.isEnabled()));
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        out.put("enabled", pushService.isEnabled());
+        out.put("provider", "azure-notification-hubs");
+        out.put("vapidPublicKey", pushService.vapidPublicKey());
+        return ResponseEntity.ok(out);
     }
 
     @GetMapping
@@ -114,40 +121,69 @@ public class NotificationController {
      */
     @PostMapping("/device-tokens")
     @Transactional
+    @SuppressWarnings("unchecked")
     public ResponseEntity<?> registerToken(@RequestBody Map<String, Object> body) {
         User actor = actor(Action.EDIT);
-        Object tokenObj = body == null ? null : body.get("token");
-        Object platformObj = body == null ? null : body.get("platform");
-        if (!(tokenObj instanceof String token) || token.isBlank() || token.length() > MAX_TOKEN_LENGTH) {
-            return ResponseEntity.badRequest().body(Map.of("error", "token is required"));
+        // Body: {"platform":"web","subscription":{"endpoint":"https://…","keys":{"p256dh":"…","auth":"…"}}}
+        // — exactly what PushSubscription.toJSON() returns in the browser.
+        Object subObj = body == null ? null : body.get("subscription");
+        if (!(subObj instanceof Map<?, ?> sub)) {
+            return ResponseEntity.badRequest().body(Map.of("error", "subscription is required"));
         }
-        if (platformObj != null && !(platformObj instanceof String)) {
-            return ResponseEntity.badRequest().body(Map.of("error", "platform must be a string"));
+        Object endpointObj = sub.get("endpoint");
+        Object keysObj = sub.get("keys");
+        if (!(endpointObj instanceof String endpoint) || !endpoint.startsWith("https://")
+                || endpoint.length() > MAX_ENDPOINT_LENGTH) {
+            return ResponseEntity.badRequest().body(Map.of("error", "subscription.endpoint must be an https URL"));
         }
-        String platform = platformObj != null ? (String) platformObj : "web";
-        if (!PLATFORMS.contains(platform)) {
-            return ResponseEntity.badRequest().body(Map.of("error", "platform must be one of android, ios, web"));
+        if (!(keysObj instanceof Map<?, ?> keys)
+                || !(keys.get("p256dh") instanceof String p256dh) || p256dh.isBlank() || p256dh.length() > 200
+                || !(keys.get("auth") instanceof String auth) || auth.isBlank() || auth.length() > 100) {
+            return ResponseEntity.badRequest().body(Map.of("error", "subscription.keys.p256dh and auth are required"));
         }
+        String installationId = PushService.installationIdFor(endpoint);
 
-        tokenRepo.deleteByTokenForOtherUsers(token, actor.getId());
+        // Device-bound: a browser that re-subscribes after another user signed in on it moves to the caller.
+        tokenRepo.deleteByTokenForOtherUsers(installationId, actor.getId());
 
-        DeviceToken dt = tokenRepo.findByUserIdAndToken(actor.getId(), token).orElseGet(DeviceToken::new);
+        DeviceToken dt = tokenRepo.findByUserIdAndToken(actor.getId(), installationId).orElseGet(DeviceToken::new);
         dt.setOrganizationId(actor.getOrganizationId());
         dt.setUserId(actor.getId());
-        dt.setToken(token);
-        dt.setPlatform(platform);
+        dt.setToken(installationId);
+        dt.setPlatform("web");
         dt.setActive(true);
         Instant now = Instant.now();
         if (dt.getCreatedAt() == null) dt.setCreatedAt(now);
         dt.setUpdatedAt(now);
-        return ResponseEntity.ok(tokenRepo.save(dt));
+        DeviceToken saved = tokenRepo.save(dt);
+
+        // The hub call happens after commit so a failed save never leaves a stray installation.
+        Long userId = actor.getId();
+        afterCommit(() -> pushService.upsertBrowserInstallation(installationId, userId, endpoint, p256dh, auth));
+        return ResponseEntity.ok(Map.of("id", saved.getId(), "token", installationId, "platform", "web"));
     }
 
     @DeleteMapping("/device-tokens/{token}")
     @Transactional
     public ResponseEntity<Void> removeToken(@PathVariable String token) {
         User actor = actor(Action.EDIT);
+        boolean owned = tokenRepo.findByUserIdAndToken(actor.getId(), token).isPresent();
         tokenRepo.deleteByUserIdAndToken(actor.getId(), token);
+        if (owned) afterCommit(() -> pushService.deleteInstallation(token));
         return ResponseEntity.noContent().build();
+    }
+
+    private static void afterCommit(Runnable r) {
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
+            org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                    new org.springframework.transaction.support.TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            r.run();
+                        }
+                    });
+        } else {
+            r.run();
+        }
     }
 }

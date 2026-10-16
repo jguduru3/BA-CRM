@@ -18,7 +18,7 @@ public class DeviceToken {
     @Column(name = "user_id", nullable = false)
     private Long userId;
 
-    // FCM registration token
+    // Azure Notification Hubs installation id ("web-" + hash of the browser push endpoint)
     @Column(nullable = false, length = 500)
     private String token;
 

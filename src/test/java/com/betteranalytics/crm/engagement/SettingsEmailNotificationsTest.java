@@ -12,6 +12,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import java.util.HashMap;
 import java.util.Map;
 
+import static org.hamcrest.Matchers.startsWith;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -99,7 +100,19 @@ class SettingsEmailNotificationsTest extends EngagementTestSupport {
 
         // SUPPORT may still manage its own inbox and device tokens.
         postAs(b, "/api/notifications/read-all", Map.of()).andExpect(status().isOk());
-        postAs(b, "/api/notifications/device-tokens", Map.of("token", "tok-" + System.nanoTime(), "platform", "web"))
-                .andExpect(status().isOk());
+        String endpoint = "https://push.example/sub/" + System.nanoTime();
+        Map<String, Object> sub = Map.of("endpoint", endpoint, "keys", Map.of("p256dh", "BP256dh", "auth", "authsecret"));
+        String installation = body(postAs(b, "/api/notifications/device-tokens", Map.of("platform", "web", "subscription", sub))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.token").value(startsWith("web-")))).path("token").asText();
+        // Re-registering the same browser is idempotent (same installation id), and malformed bodies are 400s.
+        postAs(b, "/api/notifications/device-tokens", Map.of("platform", "web", "subscription", sub))
+                .andExpect(jsonPath("$.token").value(installation));
+        postAs(b, "/api/notifications/device-tokens", Map.of("token", "legacy-fcm-token"))
+                .andExpect(status().isBadRequest());
+        postAs(b, "/api/notifications/device-tokens",
+                Map.of("subscription", Map.of("endpoint", "http://insecure", "keys", Map.of("p256dh", "x", "auth", "y"))))
+                .andExpect(status().isBadRequest());
+        deleteAs(b, "/api/notifications/device-tokens/" + installation).andExpect(status().isNoContent());
     }
 }

@@ -9,7 +9,7 @@ import type { AppNotification } from "@/lib/types";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { QueryError } from "@/components/ui/QueryError";
 import { Skeleton } from "@/components/ui/Skeleton";
-import { pushPermission, registerPush, registeredThisSession } from "@/features/settings/push";
+import { pushAvailable, pushPermission, registerPush, registeredThisSession } from "@/features/settings/push";
 
 const TYPE_ICON: Record<string, { icon: LucideIcon; color: string }> = {
   lead_assigned: { icon: UserPlus, color: "var(--brand-600)" },
@@ -24,6 +24,7 @@ const TYPE_ICON: Record<string, { icon: LucideIcon; color: string }> = {
 export function NotificationsPanel() {
   const [open, setOpen] = useState(false);
   const [permission, setPermission] = useState(() => pushPermission());
+  const [pushOn, setPushOn] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const qc = useQueryClient();
 
@@ -39,13 +40,26 @@ export function NotificationsPanel() {
     enabled: open,
   });
 
-  // Push: register this browser's token once per session when the user already granted
-  // permission. Without VITE_FIREBASE_* config this is a no-op.
+  // Push (Azure Notification Hubs): only offered when the server has it configured.
+  // Re-registers once per session when permission was already granted.
   useEffect(() => {
-    if (permission !== "granted" || registeredThisSession()) return;
-    registerPush(false).catch(() => {
-      /* push is best-effort */
-    });
+    let cancelled = false;
+    pushAvailable()
+      .then((ok) => {
+        if (cancelled) return;
+        setPushOn(ok);
+        if (ok && permission === "granted" && !registeredThisSession()) {
+          registerPush(false).catch(() => {
+            /* push is best-effort */
+          });
+        }
+      })
+      .catch(() => {
+        /* push is best-effort */
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [permission]);
 
   useEffect(() => {
@@ -127,7 +141,7 @@ export function NotificationsPanel() {
             </button>
           </div>
 
-          {permission === "default" && (
+          {pushOn && permission === "default" && (
             <button
               className="w-full flex items-center gap-2 px-4 py-2.5 text-xs text-left hairline border-b"
               style={{ backgroundColor: "rgb(var(--ring-brand) / 0.06)", color: "var(--ink-secondary)" }}

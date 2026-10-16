@@ -20,4 +20,6 @@ public interface DeviceTokenRepository extends JpaRepository<DeviceToken, Long> 
     @Modifying
     @Query("DELETE FROM DeviceToken dt WHERE dt.token = :token AND dt.userId <> :userId")
     int deleteByTokenForOtherUsers(@Param("token") String token, @Param("userId") Long userId);
+
+    boolean existsByUserIdAndActiveTrue(Long userId);
 }

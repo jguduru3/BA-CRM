@@ -53,7 +53,9 @@ via ShedLock.
 | `AZURE_KEYVAULT_URI` | — | Reserved; secrets are injected as env vars via Key Vault references (§3). |
 | `WHATSAPP_APP_SECRET` | — | Meta App Secret — required to verify inbound WhatsApp webhooks. |
 | `WHATSAPP_GRAPH_URL` | `https://graph.facebook.com/v19.0` | Meta Graph API base. |
-| `FCM_SERVER_KEY` | — | Firebase push notifications; blank disables push. |
+| `AZURE_NOTIFICATION_HUB_CONNECTION_STRING` | — | Web push via Azure Notification Hubs (DefaultFullSharedAccessSignature connection string). Blank disables push. |
+| `AZURE_NOTIFICATION_HUB_NAME` | — | Notification Hub name. |
+| `WEBPUSH_VAPID_PUBLIC_KEY` | — | Public VAPID key configured on the hub under *Browser (Web Push)*; served to browsers at runtime via `/api/notifications/push-status`. |
 | `OUTBOUND_ALLOW_PRIVATE_NETWORKS` | `false` | Lets webhooks / custom-API automations call private IPs. **Development only.** |
 | `DB_POOL_SIZE` | `15` | Hikari pool size per replica. Keep `replicas × pool` below the server's connection limit. |
 | `PORT` | `8080` | HTTP port of the api. |

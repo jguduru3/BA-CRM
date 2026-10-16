@@ -1,159 +1,147 @@
 package com.betteranalytics.crm.service;
 
-import com.betteranalytics.crm.entity.DeviceToken;
 import com.betteranalytics.crm.repository.DeviceTokenRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+import java.net.URLDecoder;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
-import java.security.KeyPair;
-import java.security.KeyPairGenerator;
-import java.security.Signature;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.when;
 
-/** FCM HTTP v1 client with a fake HTTP layer: OAuth token caching, payload, dead-token cleanup. */
+/** Azure Notification Hubs web push — exercised through a fake HTTP transport. */
 class PushServiceTest {
 
-    private final ObjectMapper om = new ObjectMapper();
+    record Call(String method, String url, Map<String, String> headers, byte[] body) {}
+
+    private final ObjectMapper json = new ObjectMapper();
+    private final List<Call> calls = new ArrayList<>();
+    private int nextStatus = 201;
     private DeviceTokenRepository repo;
-    private KeyPair keys;
-    private FakeTransport http;
     private PushService push;
 
-    /** Records requests; answers the OAuth endpoint and then the queued FCM responses in order. */
-    static class FakeTransport implements PushService.Transport {
-        final List<String> urls = new ArrayList<>();
-        final List<Map<String, String>> headers = new ArrayList<>();
-        final List<String> bodies = new ArrayList<>();
-        final Deque<PushService.Response> fcm = new ArrayDeque<>();
-        int tokenCalls = 0;
-
-        @Override
-        public PushService.Response post(String url, Map<String, String> h, byte[] body) {
-            urls.add(url);
-            headers.add(h);
-            bodies.add(new String(body, StandardCharsets.UTF_8));
-            if (url.contains("oauth2")) {
-                tokenCalls++;
-                return new PushService.Response(200, "{\"access_token\":\"ya29.token-" + tokenCalls + "\",\"expires_in\":3600}");
-            }
-            return fcm.isEmpty() ? new PushService.Response(200, "{\"name\":\"projects/p/messages/1\"}") : fcm.poll();
-        }
-    }
+    private static final String CS =
+            "Endpoint=sb://crm-ns.servicebus.windows.net/;SharedAccessKeyName=DefaultFullSharedAccessSignature;SharedAccessKey=c2VjcmV0LWtleQ==";
+    private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-01-01T00:00:00Z"), ZoneOffset.UTC);
 
     @BeforeEach
-    void setUp() throws Exception {
-        repo = mock(DeviceTokenRepository.class);
-        KeyPairGenerator g = KeyPairGenerator.getInstance("RSA");
-        g.initialize(2048);
-        keys = g.generateKeyPair();
-        http = new FakeTransport();
-        PushService.ServiceAccount sa = new PushService.ServiceAccount(
-                "demo-project", "push@demo-project.iam.gserviceaccount.com", keys.getPrivate(), PushService.DEFAULT_TOKEN_URI);
-        push = new PushService(repo, om, sa, http, Clock.fixed(Instant.parse("2026-10-15T10:00:00Z"), ZoneOffset.UTC));
-    }
-
-    private static DeviceToken token(long id, String value) {
-        DeviceToken dt = new DeviceToken();
-        dt.setId(id);
-        dt.setUserId(7L);
-        dt.setToken(value);
-        dt.setActive(true);
-        return dt;
-    }
-
-    private static PushService.Response fcmError(int status, String grpcStatus, String errorCode) {
-        String details = errorCode == null ? "[]"
-                : "[{\"@type\":\"type.googleapis.com/google.firebase.fcm.v1.FcmError\",\"errorCode\":\"" + errorCode + "\"}]";
-        return new PushService.Response(status,
-                "{\"error\":{\"code\":" + status + ",\"message\":\"x\",\"status\":\"" + grpcStatus + "\",\"details\":" + details + "}}");
+    void setUp() {
+        repo = Mockito.mock(DeviceTokenRepository.class);
+        when(repo.existsByUserIdAndActiveTrue(7L)).thenReturn(true);
+        PushService.Transport t = (method, url, headers, body) -> {
+            calls.add(new Call(method, url, headers, body));
+            return new PushService.Response(nextStatus, "");
+        };
+        push = new PushService(repo, json, PushService.parseConnectionString(CS, "crm-hub"), "BPublicVapidKey", t, CLOCK);
     }
 
     @Test
-    void sendsV1MessageWithCachedOAuthToken() throws Exception {
-        when(repo.findByUserId(7L)).thenReturn(List.of(token(1, "device-a"), token(2, "device-b")));
-        push.sendToUser(7L, "Lead assigned", "Acme Corp", Map.of("type", "lead_assigned", "relatedId", "42"));
-
-        assertThat(http.tokenCalls).isEqualTo(1);                       // one OAuth exchange for both devices
-        assertThat(http.urls).filteredOn(u -> u.contains("fcm.googleapis.com")).hasSize(2)
-                .allMatch(u -> u.equals("https://fcm.googleapis.com/v1/projects/demo-project/messages:send"));
-        int sendIdx = http.urls.indexOf("https://fcm.googleapis.com/v1/projects/demo-project/messages:send");
-        assertThat(http.headers.get(sendIdx).get("Authorization")).isEqualTo("Bearer ya29.token-1");
-        JsonNode msg = om.readTree(http.bodies.get(sendIdx)).path("message");
-        assertThat(msg.path("token").asText()).isEqualTo("device-a");
-        assertThat(msg.path("notification").path("title").asText()).isEqualTo("Lead assigned");
-        assertThat(msg.path("data").path("relatedId").asText()).isEqualTo("42");
-        verify(repo, never()).deleteById(anyLong());
-
-        // The OAuth assertion is an RS256 JWT signed with the service-account key.
-        String form = http.bodies.get(0);
-        assertThat(form).contains("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer");
-        String jwt = java.net.URLDecoder.decode(form.substring(form.indexOf("assertion=") + 10), StandardCharsets.UTF_8);
-        String[] parts = jwt.split("\\.");
-        Signature verifier = Signature.getInstance("SHA256withRSA");
-        verifier.initVerify(keys.getPublic());
-        verifier.update((parts[0] + "." + parts[1]).getBytes(StandardCharsets.US_ASCII));
-        assertThat(verifier.verify(Base64.getUrlDecoder().decode(parts[2]))).isTrue();
-        JsonNode claims = om.readTree(Base64.getUrlDecoder().decode(parts[1]));
-        assertThat(claims.path("scope").asText()).isEqualTo(PushService.SCOPE);
-        assertThat(claims.path("iss").asText()).isEqualTo("push@demo-project.iam.gserviceaccount.com");
+    void parsesConnectionStringAndIsEnabled() {
+        assertThat(push.isEnabled()).isTrue();
+        assertThat(push.vapidPublicKey()).isEqualTo("BPublicVapidKey");
+        PushService.HubConfig c = PushService.parseConnectionString(CS, "crm-hub");
+        assertThat(c.namespaceHost()).isEqualTo("crm-ns.servicebus.windows.net");
+        assertThat(c.keyName()).isEqualTo("DefaultFullSharedAccessSignature");
     }
 
     @Test
-    void unregisteredTokenIsDeleted() {
-        http.fcm.add(fcmError(404, "NOT_FOUND", "UNREGISTERED"));
-        assertThat(push.sendToDevice(token(11, "stale"), "t", "b", null)).isEqualTo(PushService.Result.TOKEN_DELETED);
-        verify(repo).deleteById(11L);
+    void disabledWithoutConfigurationOrVapidKey() {
+        PushService.Transport fail = (m, u, h, b) -> { throw new AssertionError("no HTTP when disabled"); };
+        PushService none = new PushService(repo, json, null, "BKey", fail, CLOCK);
+        PushService noKey = new PushService(repo, json, PushService.parseConnectionString(CS, "crm-hub"), "", fail, CLOCK);
+        assertThat(none.isEnabled()).isFalse();
+        assertThat(noKey.isEnabled()).isFalse();
+        assertThat(none.sendToUser(7L, "t", "b", Map.of())).isEqualTo(PushService.Result.DISABLED);
+        assertThat(noKey.upsertBrowserInstallation("web-x", 7L, "https://push.example/1", "p", "a"))
+                .isEqualTo(PushService.Result.DISABLED);
+        assertThat(PushService.parseConnectionString("garbage", "hub")).isNull();
+        assertThat(PushService.parseConnectionString(CS, "")).isNull();
     }
 
     @Test
-    void invalidArgumentTokenIsDeleted() {
-        http.fcm.add(fcmError(400, "INVALID_ARGUMENT", null));
-        assertThat(push.sendToDevice(token(12, "garbage"), "t", "b", null)).isEqualTo(PushService.Result.TOKEN_DELETED);
-        verify(repo).deleteById(12L);
+    void sasTokenIsSignedOverTheLowercasedEncodedHubUri() throws Exception {
+        String sas = push.sasToken();
+        assertThat(sas).startsWith("SharedAccessSignature sr=");
+        Map<String, String> p = new HashMap<>();
+        for (String kv : sas.substring("SharedAccessSignature ".length()).split("&")) {
+            int i = kv.indexOf('=');
+            p.put(kv.substring(0, i), kv.substring(i + 1));
+        }
+        String resource = p.get("sr");
+        assertThat(URLDecoder.decode(resource, StandardCharsets.UTF_8))
+                .isEqualTo("https://crm-ns.servicebus.windows.net/crm-hub");
+        assertThat(p.get("skn")).isEqualTo("DefaultFullSharedAccessSignature");
+        long se = Long.parseLong(p.get("se"));
+        assertThat(se).isEqualTo(CLOCK.instant().getEpochSecond() + 3600);
+
+        Mac mac = Mac.getInstance("HmacSHA256");
+        mac.init(new SecretKeySpec("c2VjcmV0LWtleQ==".getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+        String expected = Base64.getEncoder().encodeToString(mac.doFinal((resource + "\n" + se).getBytes(StandardCharsets.UTF_8)));
+        assertThat(p.get("sig")).isEqualTo(URLEncoder.encode(expected, StandardCharsets.UTF_8));
     }
 
     @Test
-    void transientErrorsKeepTheToken() {
-        http.fcm.add(fcmError(503, "UNAVAILABLE", "UNAVAILABLE"));
-        http.fcm.add(fcmError(429, "RESOURCE_EXHAUSTED", "QUOTA_EXCEEDED"));
-        assertThat(push.sendToDevice(token(13, "ok"), "t", "b", null)).isEqualTo(PushService.Result.FAILED);
-        assertThat(push.sendToDevice(token(13, "ok"), "t", "b", null)).isEqualTo(PushService.Result.FAILED);
-        verify(repo, never()).deleteById(anyLong());
+    void registersBrowserInstallationTaggedWithTheUser() throws Exception {
+        String id = PushService.installationIdFor("https://push.example/sub/abc");
+        assertThat(id).startsWith("web-").hasSize(36).doesNotContain("push.example");
+
+        assertThat(push.upsertBrowserInstallation(id, 7L, "https://push.example/sub/abc", "P256", "AUTH"))
+                .isEqualTo(PushService.Result.SENT);
+        Call c = calls.get(0);
+        assertThat(c.method()).isEqualTo("PUT");
+        assertThat(c.url()).isEqualTo("https://crm-ns.servicebus.windows.net/crm-hub/installations/" + id + "?api-version=2020-06");
+        assertThat(c.headers().get("Authorization")).startsWith("SharedAccessSignature ");
+        JsonNode body = json.readTree(c.body());
+        assertThat(body.path("platform").asText()).isEqualTo("browser");
+        assertThat(body.path("pushChannel").path("endpoint").asText()).isEqualTo("https://push.example/sub/abc");
+        assertThat(body.path("pushChannel").path("p256dh").asText()).isEqualTo("P256");
+        assertThat(body.path("pushChannel").path("auth").asText()).isEqualTo("AUTH");
+        assertThat(body.path("tags").get(0).asText()).isEqualTo("user:7");
     }
 
     @Test
-    void expiredAccessTokenIsRefreshedOnceOn401() {
-        http.fcm.add(new PushService.Response(401, "{\"error\":{\"status\":\"UNAUTHENTICATED\"}}"));
-        assertThat(push.sendToDevice(token(14, "ok"), "t", "b", null)).isEqualTo(PushService.Result.SENT);
-        assertThat(http.tokenCalls).isEqualTo(2);
-        verify(repo, never()).deleteById(anyLong());
+    void sendsOneTaggedBrowserNotificationPerUser() throws Exception {
+        assertThat(push.sendToUser(7L, "Deal won", "Acme signed", Map.of("relatedType", "Opportunity", "relatedId", "5")))
+                .isEqualTo(PushService.Result.SENT);
+        assertThat(calls).hasSize(1);
+        Call c = calls.get(0);
+        assertThat(c.method()).isEqualTo("POST");
+        assertThat(c.url()).isEqualTo("https://crm-ns.servicebus.windows.net/crm-hub/messages/?api-version=2020-06");
+        assertThat(c.headers()).containsEntry("ServiceBusNotification-Format", "browser")
+                .containsEntry("ServiceBusNotification-Tags", "user:7");
+        JsonNode body = json.readTree(c.body());
+        assertThat(body.path("title").asText()).isEqualTo("Deal won");
+        assertThat(body.path("data").path("relatedId").asText()).isEqualTo("5");
     }
 
     @Test
-    void disabledWithoutConfigurationAndParsesBase64Json() throws Exception {
-        PushService off = new PushService(repo, om, null, http, Clock.systemUTC());
-        assertThat(off.isEnabled()).isFalse();
-        off.sendToUser(7L, "t", "b", Map.of());
-        assertThat(http.urls).isEmpty();
-        verifyNoInteractions(repo);
+    void usersWithoutDevicesAreSkippedAndFailuresNeverThrow() {
+        assertThat(push.sendToUser(99L, "t", "b", Map.of())).isEqualTo(PushService.Result.DISABLED);
+        assertThat(calls).isEmpty();
 
-        String pem = "-----BEGIN PRIVATE KEY-----\n"
-                + Base64.getMimeEncoder().encodeToString(keys.getPrivate().getEncoded()) + "\n-----END PRIVATE KEY-----\n";
-        String json = om.writeValueAsString(Map.of("type", "service_account", "project_id", "p1",
-                "client_email", "a@p1.iam.gserviceaccount.com", "private_key", pem));
-        assertThat(PushService.parseServiceAccount(json, om).projectId()).isEqualTo("p1");
-        String b64 = Base64.getEncoder().encodeToString(json.getBytes(StandardCharsets.UTF_8));
-        assertThat(PushService.parseServiceAccount(b64, om).clientEmail()).isEqualTo("a@p1.iam.gserviceaccount.com");
-        assertThat(PushService.parseServiceAccount("{not json", om)).isNull();
-        assertThat(PushService.parseServiceAccount("", om)).isNull();
+        nextStatus = 500;
+        assertThat(push.sendToUser(7L, "t", "b", Map.of())).isEqualTo(PushService.Result.FAILED);
+
+        PushService.Transport boom = (m, u, h, b) -> { throw new java.io.IOException("network down"); };
+        PushService broken = new PushService(repo, json, PushService.parseConnectionString(CS, "crm-hub"), "BKey", boom, CLOCK);
+        assertThat(broken.sendToUser(7L, "t", "b", Map.of())).isEqualTo(PushService.Result.FAILED);
+    }
+
+    @Test
+    void deletingAMissingInstallationIsFine() {
+        nextStatus = 404;
+        assertThat(push.deleteInstallation("web-gone")).isEqualTo(PushService.Result.SENT);
+        assertThat(calls.get(0).method()).isEqualTo("DELETE");
     }
 }

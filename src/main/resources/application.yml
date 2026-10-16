@@ -154,9 +154,13 @@ app:
     app-secret: ${WHATSAPP_APP_SECRET:}
     allow-unsigned-webhooks: false
 
-  fcm:
-    # Firebase Cloud Messaging legacy HTTP server key — leave blank to skip push
-    server-key: ${FCM_SERVER_KEY:}
+  push:
+    # Web push via Azure Notification Hubs (no Firebase). Blank = push disabled.
+    azure-hub:
+      connection-string: ${AZURE_NOTIFICATION_HUB_CONNECTION_STRING:}
+      name: ${AZURE_NOTIFICATION_HUB_NAME:}
+    # Public half of the VAPID key pair configured on the hub (Browser / Web Push settings).
+    vapid-public-key: ${WEBPUSH_VAPID_PUBLIC_KEY:}
 
   storage:
     # Attachment storage when Azure Blob isn't configured (azure.blob.connection-string
@@ -240,10 +244,7 @@ spring:
     database-platform: org.hibernate.dialect.PostgreSQLDialect
 
 ---
-# ── Engagement: FCM HTTP v1 push + automation cron scan (applies to every profile) ──
+# ── Engagement: automation cron scan (applies to every profile) ──
 app:
-  fcm:
-    # Google service-account key JSON (raw or base64) for FCM HTTP v1. Blank = push disabled.
-    service-account-json: ${FCM_SERVICE_ACCOUNT_JSON:}
   automations:
     scheduler-delay-ms: ${AUTOMATIONS_SCHEDULER_DELAY_MS:60000}

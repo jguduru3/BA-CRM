@@ -21,15 +21,15 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Creates in-app notifications and sends a push for each one (FCM HTTP v1 via
- * {@link PushService}; disabled cleanly when FCM_SERVICE_ACCOUNT_JSON is unset).
+ * Creates in-app notifications and sends a web push for each one (Azure
+ * Notification Hubs via {@link PushService}; disabled cleanly when the hub isn't configured).
  *
  * Push delivery is strictly best-effort:
  *   - the in-app notification row is the source of truth;
  *   - pushes never run inside the caller's DB transaction: when one is active
  *     they are dispatched after it commits (and dropped if it rolls back),
  *     otherwise immediately — in both cases on a small bounded pool with short
- *     connect/read timeouts, so a slow FCM never blocks a request;
+ *     connect/read timeouts, so a slow push service never blocks a request;
  *   - nothing here throws to the caller because a push failed, and device
  *     tokens are never logged.
  */
@@ -52,7 +52,7 @@ public class NotificationService {
         // Bounded pool + queue; when saturated, pushes are dropped (best-effort) rather than blocking callers.
         this.pushExecutor = new ThreadPoolExecutor(1, 2, 60, TimeUnit.SECONDS,
                 new ArrayBlockingQueue<>(500),
-                r -> { Thread t = new Thread(r, "fcm-push"); t.setDaemon(true); return t; },
+                r -> { Thread t = new Thread(r, "web-push"); t.setDaemon(true); return t; },
                 new ThreadPoolExecutor.DiscardPolicy());
     }
 
