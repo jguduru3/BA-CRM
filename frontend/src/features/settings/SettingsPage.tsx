@@ -85,7 +85,7 @@ export default function SettingsPage() {
   });
 
   return (
-    <div className="flex flex-col gap-5 max-w-3xl">
+    <div className="flex flex-col gap-4 max-w-3xl">
       <PageHeader title="Settings" description="Your profile, AI assistant and workspace configuration." icon={<SettingsIcon size={20} />} />
 
       <Tabs
@@ -100,7 +100,7 @@ export default function SettingsPage() {
       />
 
       {tab === "profile" && (
-        <div className="glass-card p-5 space-y-5">
+        <div className="glass-card p-4 space-y-4">
           <div className="flex items-center gap-4">
             <Avatar name={profile.name} color={profile.color} size={56} />
             <div>
@@ -163,7 +163,7 @@ export default function SettingsPage() {
       {tab === "email" && managesMail && <EmailAccountsTab canManage={managesMail} />}
 
       {tab === "organization" && isAdmin && (
-        <div className="glass-card p-5 space-y-5">
+        <div className="glass-card p-4 space-y-4">
           <div className="flex items-center gap-2">
             <Building2 size={16} style={{ color: "var(--brand-600)" }} />
             <span className="text-sm font-semibold" style={{ color: "var(--ink-primary)" }}>

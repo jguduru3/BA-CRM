@@ -240,7 +240,7 @@ export function CampaignDetailDrawer({ campaignId, onClose }: { campaignId: numb
           <Skeleton className="h-40 w-full" />
         </div>
       ) : editing ? (
-        <div className="space-y-5">
+        <div className="space-y-4">
           <CampaignForm value={draft} onChange={setDraft} isNew={false} />
           <div className="flex justify-end gap-2 pt-4 hairline border-t">
             <button className="btn-ghost" onClick={() => setEditing(false)}>
@@ -256,7 +256,7 @@ export function CampaignDetailDrawer({ campaignId, onClose }: { campaignId: numb
           </div>
         </div>
       ) : (
-        <div className="space-y-6">
+        <div className="space-y-4">
           {status === "rejected" && c.rejectionReason && (
             <div className="rounded-xl px-4 py-3 text-sm" style={{ backgroundColor: "rgb(208 59 59 / 0.08)", color: "var(--critical)" }}>
               <p className="font-semibold">Sent back by the reviewer</p>
@@ -448,7 +448,7 @@ export function CampaignDetailDrawer({ campaignId, onClose }: { campaignId: numb
             ) : recipientsPage.isLoading ? (
               <Skeleton className="h-32 w-full" />
             ) : (recipientsPage.data ?? []).length === 0 ? (
-              <p className="text-sm py-6 text-center" style={{ color: "var(--ink-muted)" }}>
+              <p className="text-sm py-4 text-center" style={{ color: "var(--ink-muted)" }}>
                 {statusFilter ? "No recipients with this status." : "No recipients yet."}
               </p>
             ) : (

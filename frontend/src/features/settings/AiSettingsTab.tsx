@@ -87,7 +87,7 @@ export function AiSettingsTab() {
   }
   if (settings.isLoading || !settings.data) {
     return (
-      <div className="glass-card p-5 space-y-4">
+      <div className="glass-card p-4 space-y-4">
         <Skeleton className="h-5 w-40" />
         <Skeleton className="h-10 w-full" />
         <Skeleton className="h-10 w-full" />
@@ -104,7 +104,7 @@ export function AiSettingsTab() {
     : { label: "Turned off", cls: "badge-neutral" };
 
   return (
-    <div className="glass-card p-5 sm:p-6 space-y-6">
+    <div className="glass-card p-4 sm:p-4 space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-start gap-3">
           <div

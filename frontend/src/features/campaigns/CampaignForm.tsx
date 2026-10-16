@@ -120,7 +120,7 @@ export function CampaignForm({
           : "How the campaign reaches recipients";
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <Field label="Campaign name" required>
         <input className="input" maxLength={200} value={value.name ?? ""} onChange={(e) => set({ name: e.target.value })} />
       </Field>

@@ -71,7 +71,7 @@ function RunsLog({ automationId }: { automationId: number }) {
   if (runs.isLoading) return <Skeleton className="h-24 w-full" />;
   if ((runs.data ?? []).length === 0)
     return (
-      <p className="text-sm py-6 text-center" style={{ color: "var(--ink-muted)" }}>
+      <p className="text-sm py-4 text-center" style={{ color: "var(--ink-muted)" }}>
         No runs yet — use Run now to test it.
       </p>
     );
@@ -210,7 +210,7 @@ export default function AutomationsPage() {
     (state.actionType !== "custom_api" || (typeof state.config.url === "string" && state.config.url.trim() !== ""));
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-4">
       <PageHeader
         title="AI Automations"
         description="When something happens, let AI draft, analyse or call your systems — every run is logged."
@@ -320,7 +320,7 @@ export default function AutomationsPage() {
         {selected && drawerTab === "runs" ? (
           <RunsLog automationId={selected.id} />
         ) : (
-          <div className="space-y-5">
+          <div className="space-y-4">
             <AutomationEditor value={state} onChange={setState} existing={selected} privileged={privileged} />
             {selected?.triggerType === "webhook" && (
               <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl px-4 py-3 glass-solid text-xs">

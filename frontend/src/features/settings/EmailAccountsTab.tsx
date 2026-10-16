@@ -111,7 +111,7 @@ export function EmailAccountsTab({ canManage }: { canManage: boolean }) {
     /.+@.+\..+/.test(draft.emailAddress.trim()) && draft.smtpHost.trim() !== "" && draft.smtpPassword !== "";
 
   return (
-    <div className="glass-card p-5 sm:p-6 space-y-5">
+    <div className="glass-card p-4 sm:p-4 space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-start gap-3">
           <div className="flex items-center justify-center h-10 w-10 rounded-xl shrink-0" style={{ backgroundImage: "var(--brand-gradient)" }}>
@@ -227,7 +227,7 @@ export function EmailAccountsTab({ canManage }: { canManage: boolean }) {
       ) : accounts.isLoading ? (
         <Skeleton className="h-24 w-full" />
       ) : (accounts.data ?? []).length === 0 ? (
-        <p className="text-sm py-6 text-center" style={{ color: "var(--ink-muted)" }}>
+        <p className="text-sm py-4 text-center" style={{ color: "var(--ink-muted)" }}>
           No mailbox connected yet.
         </p>
       ) : (

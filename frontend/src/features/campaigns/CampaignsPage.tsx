@@ -154,7 +154,7 @@ export default function CampaignsPage() {
   ];
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-4">
       <PageHeader
         title="Campaigns"
         description="Draft → approval → scheduled → sending → completed, with live delivery tracking."
@@ -206,7 +206,7 @@ export default function CampaignsPage() {
       <CampaignDetailDrawer campaignId={selectedId} onClose={() => setSelectedId(null)} />
 
       <Drawer open={creating} onClose={() => setCreating(false)} title="New campaign" subtitle="Saved as a draft — nothing is sent yet" width="34rem">
-        <div className="space-y-5">
+        <div className="space-y-4">
           <CampaignForm value={draft} onChange={setDraft} isNew />
           <div className="flex items-center justify-end gap-2 pt-4 hairline border-t">
             <button className="btn-ghost" onClick={() => setCreating(false)}>

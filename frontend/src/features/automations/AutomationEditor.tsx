@@ -61,7 +61,7 @@ export function AutomationEditor({
   const num = (k: keyof ActionConfig) => (typeof value.config[k] === "number" ? String(value.config[k]) : "");
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div className="space-y-4">
         <Field label="Name" required>
           <input className="input" maxLength={200} value={value.name} onChange={(e) => set({ name: e.target.value })} />
