@@ -3,6 +3,9 @@ package com.betteranalytics.crm.controller;
 import com.betteranalytics.crm.core.ListParams;
 import com.betteranalytics.crm.core.Patch;
 import com.betteranalytics.crm.core.Specs;
+import com.betteranalytics.crm.dedupe.DuplicateGuard;
+import com.betteranalytics.crm.dedupe.ObjectType;
+import com.betteranalytics.crm.dedupe.Probe;
 import com.betteranalytics.crm.entity.Contact;
 import com.betteranalytics.crm.entity.User;
 import com.betteranalytics.crm.permission.Action;
@@ -40,15 +43,17 @@ public class ContactController {
     private final AuditService auditService;
     private final PermissionService permissionService;
     private final TenantGuard tenantGuard;
+    private final DuplicateGuard duplicateGuard;
 
     public ContactController(ContactRepository contactRepository, CurrentUser currentUser,
                              AuditService auditService, PermissionService permissionService,
-                             TenantGuard tenantGuard) {
+                             TenantGuard tenantGuard, DuplicateGuard duplicateGuard) {
         this.contactRepository = contactRepository;
         this.currentUser = currentUser;
         this.auditService = auditService;
         this.permissionService = permissionService;
         this.tenantGuard = tenantGuard;
+        this.duplicateGuard = duplicateGuard;
     }
 
     @GetMapping
@@ -100,11 +105,13 @@ public class ContactController {
         Contact contact = new Contact();
         apply(contact, p);
         contact.setOrganizationId(currentUser.organizationId());
+        DuplicateGuard.Outcome duplicates = duplicateGuard.checkCreate(actor, ObjectType.CONTACT, Probe.of(contact));
         contact.setOwnerId(ownerId != null ? ownerId : actor.getId());
         contact.setCreatedAt(Instant.now());
         contact.setUpdatedAt(Instant.now());
         contactRepository.save(contact);
         auditService.log("create", "contacts", contact.getId(), contact.getName(), null, contact);
+        duplicateGuard.afterSave(duplicates, contact.getId(), contact.getName());
         return ResponseEntity.status(201).body(contact);
     }
 
@@ -129,9 +136,12 @@ public class ContactController {
         Contact before = snapshot(existing);
         apply(existing, p);
         if (newOwner != null) existing.setOwnerId(newOwner);
+        DuplicateGuard.Outcome duplicates =
+                duplicateGuard.checkEdit(actor, ObjectType.CONTACT, Probe.of(before), Probe.of(existing));
         existing.setUpdatedAt(Instant.now());
         contactRepository.save(existing);
         auditService.log("update", "contacts", id, existing.getName(), before, existing);
+        duplicateGuard.afterSave(duplicates, id, existing.getName());
         return ResponseEntity.ok(existing);
     }
 

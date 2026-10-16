@@ -4,6 +4,7 @@ import {
   Building2,
   Calendar,
   CheckSquare,
+  Copy,
   Database,
   FileText,
   FolderKanban,
@@ -58,6 +59,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { to: "/opportunities", label: "Opportunities", icon: Handshake },
       { to: "/companies", label: "Companies", icon: Building2 },
       { to: "/contacts", label: "Contacts", icon: UserSquare2 },
+      { to: "/duplicates", label: "Duplicates", icon: Copy, minRole: MANAGER_UP },
     ],
   },
   {

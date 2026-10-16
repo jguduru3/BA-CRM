@@ -39,6 +39,7 @@ const ChangePasswordPage = lazy(() => import("@/features/auth/ChangePasswordPage
 const IntegrationsPage = lazy(() => import("@/features/integrations/IntegrationsPage"));
 const SequencesPage = lazy(() => import("@/features/sequences/SequencesPage"));
 const NotFoundPage = lazy(() => import("@/features/misc/NotFoundPage"));
+const DuplicatesPage = lazy(() => import("@/features/duplicates/DuplicatesPage"));
 
 export default function App() {
   const signedIn = useAuthStore((s) => s.isAuthenticated);
@@ -81,6 +82,7 @@ export default function App() {
               <Route path="/trash" element={<TrashPage />} />
               <Route path="/integrations" element={<IntegrationsPage />} />
               <Route path="/sequences" element={<SequencesPage />} />
+              <Route path="/duplicates" element={<DuplicatesPage />} />
               <Route path="*" element={<NotFoundPage />} />
             </Route>
           </Route>

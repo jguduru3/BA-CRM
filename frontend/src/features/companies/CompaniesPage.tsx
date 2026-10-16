@@ -23,6 +23,9 @@ import { useServerList } from "@/features/crm/useServerList";
 import { CompanyDraft, CompanyForm, COMPANY_STATUSES } from "./CompanyForm";
 import { AttachmentList } from "@/components/ui/AttachmentList";
 import { RecordPagePanel } from "@/features/recordpages/RecordPagePanel";
+import { DuplicateDialog } from "@/features/duplicates/DuplicateDialog";
+import { isDuplicateError, saveChecked } from "@/features/duplicates/duplicates";
+import type { DuplicateError } from "@/features/duplicates/duplicates";
 
 export default function CompaniesPage() {
   const [params, setParams] = useSearchParams();
@@ -34,6 +37,7 @@ export default function CompaniesPage() {
   const qc = useQueryClient();
   const { confirm, node: confirmNode } = useConfirm();
   const { askReason, node: reasonNode } = useReason();
+  const [duplicate, setDuplicate] = useState<DuplicateError | null>(null);
   const role = useAuthStore((s) => s.user?.role);
   const readOnly = isReadOnly(role);
   const manager = isManagerUp(role);
@@ -52,12 +56,15 @@ export default function CompaniesPage() {
     if (!id) return;
     api
       .get<Company>(`/companies/${id}`)
-      .then((r) => setSelected(r.data))
+      .then((r) => {
+        setCreating(false);
+        setSelected(r.data);
+      })
       .catch((e) => toast.error(e instanceof Error ? e.message : "Company not found"));
     params.delete("open");
     setParams(params, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [params.get("open")]);
 
   const userName = (id: number | null) => users.data?.find((u) => u.id === id)?.name;
   const invalidate = () => {
@@ -72,16 +79,17 @@ export default function CompaniesPage() {
   };
 
   const save = useMutation({
-    mutationFn: async () =>
+    mutationFn: async (allowDuplicate: boolean = false) =>
       selected
-        ? (await api.patch<Company>(`/companies/${selected.id}`, changedFields(selected, draft))).data
-        : (await api.post<Company>("/companies", draft)).data,
+        ? saveChecked<Company>("patch", `/companies/${selected.id}`, changedFields(selected, draft), "company", allowDuplicate)
+        : saveChecked<Company>("post", "/companies", draft, "company", allowDuplicate),
     onSuccess: () => {
+      setDuplicate(null);
       toast.success(selected ? "Company updated" : "Company created");
       invalidate();
       closeDrawers();
     },
-    onError: (e: Error) => toast.error(saveErrorMessage(e, "company")),
+    onError: (e: Error) => (isDuplicateError(e) ? setDuplicate(e) : toast.error(saveErrorMessage(e, "company"))),
   });
 
   /**
@@ -275,7 +283,7 @@ export default function CompaniesPage() {
             Cancel
           </button>
           {!readOnly && (
-            <button className="btn-primary" disabled={!draft.name || save.isPending} onClick={() => save.mutate()}>
+            <button className="btn-primary" disabled={!draft.name || save.isPending} onClick={() => save.mutate(false)}>
               {save.isPending ? "Saving…" : selected ? "Save changes" : "Create company"}
             </button>
           )}
@@ -283,6 +291,12 @@ export default function CompaniesPage() {
       </Drawer>
       {confirmNode}
       {reasonNode}
+      <DuplicateDialog
+        error={duplicate}
+        saving={save.isPending}
+        onClose={() => setDuplicate(null)}
+        onSaveAnyway={() => save.mutate(true)}
+      />
     </div>
   );
 }

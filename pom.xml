@@ -152,6 +152,17 @@
       <version>${applicationinsights.version}</version>
     </dependency>
 
+    <!-- Duplicate detection: Jaro-Winkler (commons-text) + Double Metaphone (commons-codec) -->
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-text</artifactId>
+      <version>1.12.0</version>
+    </dependency>
+    <dependency>
+      <groupId>commons-codec</groupId>
+      <artifactId>commons-codec</artifactId>
+    </dependency>
+
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-test</artifactId>

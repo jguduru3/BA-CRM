@@ -25,6 +25,9 @@ import { useServerList } from "@/features/crm/useServerList";
 import { ContactDraft, ContactForm } from "./ContactForm";
 import { AttachmentList } from "@/components/ui/AttachmentList";
 import { RecordPagePanel } from "@/features/recordpages/RecordPagePanel";
+import { DuplicateDialog } from "@/features/duplicates/DuplicateDialog";
+import { isDuplicateError, saveChecked } from "@/features/duplicates/duplicates";
+import type { DuplicateError } from "@/features/duplicates/duplicates";
 
 export default function ContactsPage() {
   const [params, setParams] = useSearchParams();
@@ -40,6 +43,7 @@ export default function ContactsPage() {
   const categories = useContactCategories();
   const qc = useQueryClient();
   const { askReason, node: reasonNode } = useReason();
+  const [duplicate, setDuplicate] = useState<DuplicateError | null>(null);
   const role = useAuthStore((s) => s.user?.role);
   const readOnly = isReadOnly(role);
   const manager = isManagerUp(role);
@@ -58,12 +62,15 @@ export default function ContactsPage() {
     if (!id) return;
     api
       .get<Contact>(`/contacts/${id}`)
-      .then((r) => setSelected(r.data))
+      .then((r) => {
+        setCreating(false);
+        setSelected(r.data);
+      })
       .catch((e) => toast.error(e instanceof Error ? e.message : "Contact not found"));
     params.delete("open");
     setParams(params, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [params.get("open")]);
 
   const userName = (id: number | null) => users.data?.find((u) => u.id === id)?.name;
   const companyName = (id: number | null) => companies.data?.data.find((c) => c.id === id)?.name;
@@ -80,16 +87,17 @@ export default function ContactsPage() {
   const invalidate = () => qc.invalidateQueries({ queryKey: ["contacts"] });
 
   const save = useMutation({
-    mutationFn: async () =>
+    mutationFn: async (allowDuplicate: boolean = false) =>
       selected
-        ? (await api.patch<Contact>(`/contacts/${selected.id}`, changedFields(selected, draft))).data
-        : (await api.post<Contact>("/contacts", draft)).data,
+        ? saveChecked<Contact>("patch", `/contacts/${selected.id}`, changedFields(selected, draft), "contact", allowDuplicate)
+        : saveChecked<Contact>("post", "/contacts", draft, "contact", allowDuplicate),
     onSuccess: () => {
+      setDuplicate(null);
       toast.success(selected ? "Contact updated" : "Contact created");
       invalidate();
       closeDrawers();
     },
-    onError: (e: Error) => toast.error(saveErrorMessage(e, "contact")),
+    onError: (e: Error) => (isDuplicateError(e) ? setDuplicate(e) : toast.error(saveErrorMessage(e, "contact"))),
   });
 
   const remove = useMutation({
@@ -314,7 +322,7 @@ export default function ContactsPage() {
             Cancel
           </button>
           {!readOnly && (
-            <button className="btn-primary" disabled={!draft.name || save.isPending} onClick={() => save.mutate()}>
+            <button className="btn-primary" disabled={!draft.name || save.isPending} onClick={() => save.mutate(false)}>
               {save.isPending ? "Saving…" : selected ? "Save changes" : "Create contact"}
             </button>
           )}
@@ -323,6 +331,12 @@ export default function ContactsPage() {
 
       <CategoryManager open={categoriesOpen} onClose={() => setCategoriesOpen(false)} />
       {reasonNode}
+      <DuplicateDialog
+        error={duplicate}
+        saving={save.isPending}
+        onClose={() => setDuplicate(null)}
+        onSaveAnyway={() => save.mutate(true)}
+      />
     </div>
   );
 }
