@@ -5,8 +5,13 @@ import com.betteranalytics.crm.core.ListParams;
 import com.betteranalytics.crm.core.Patch;
 import com.betteranalytics.crm.core.PipelineSettingsService;
 import com.betteranalytics.crm.core.Specs;
+import com.betteranalytics.crm.entity.ForecastCategory;
 import com.betteranalytics.crm.entity.Opportunity;
+import com.betteranalytics.crm.entity.OpportunityStageHistory;
 import com.betteranalytics.crm.entity.Role;
+import com.betteranalytics.crm.pipeline.DealHealthService;
+import com.betteranalytics.crm.pipeline.StageHistoryService;
+import com.betteranalytics.crm.repository.OpportunityStageHistoryRepository;
 import com.betteranalytics.crm.entity.User;
 import com.betteranalytics.crm.permission.Action;
 import com.betteranalytics.crm.permission.PermissionService;
@@ -59,11 +64,19 @@ public class OpportunityController {
     private final TenantGuard           tenantGuard;
     private final CrmMasks              masks;
     private final PipelineSettingsService pipelineSettings;
+    private final StageHistoryService     stageHistory;
+    private final OpportunityStageHistoryRepository historyRepository;
+    private final DealHealthService       dealHealth;
 
     public OpportunityController(OpportunityRepository opportunityRepository, CurrentUser currentUser,
                                  AuditService auditService, PermissionService permissionService,
                                  NotificationService notificationService, AiAutomationService aiAutomationService,
-                                 TenantGuard tenantGuard, CrmMasks masks, PipelineSettingsService pipelineSettings) {
+                                 TenantGuard tenantGuard, CrmMasks masks, PipelineSettingsService pipelineSettings,
+                                 StageHistoryService stageHistory, OpportunityStageHistoryRepository historyRepository,
+                                 DealHealthService dealHealth) {
+        this.stageHistory          = stageHistory;
+        this.historyRepository     = historyRepository;
+        this.dealHealth            = dealHealth;
         this.opportunityRepository = opportunityRepository;
         this.currentUser           = currentUser;
         this.auditService          = auditService;
@@ -117,6 +130,14 @@ public class OpportunityController {
         return ResponseEntity.ok(forResponse(actor, opp));
     }
 
+    /** Append-only stage history of a deal, oldest first. Visible to whoever may view the deal. */
+    @GetMapping("/{id}/stage-history")
+    public List<OpportunityStageHistory> stageHistory(@PathVariable Long id) {
+        get(id); // same visibility rules as the deal itself
+        return historyRepository.findByOpportunityIdAndOrganizationIdOrderByEnteredAtAscIdAsc(id, currentUser.organizationId());
+    }
+
+    @Transactional
     @PostMapping
     public ResponseEntity<?> create(@RequestBody JsonNode body) {
         User actor = currentUser.get();
@@ -155,10 +176,21 @@ public class OpportunityController {
             }
         }
         applyCloseTransition(opp, null, p);
-        opp.setCreatedAt(Instant.now());
-        opp.setUpdatedAt(Instant.now());
+        Instant now = Instant.now();
+        opp.setCreatedAt(now);
+        opp.setUpdatedAt(now);
+        opp.setStageEnteredAt(now);
+        if (p.hasValue("forecastCategory")) {
+            opp.setForecastCategory(validCategoryOverride(opp.getStage(), p.str("forecastCategory")));
+            opp.setForecastCategoryOverridden(true);
+        }
+        pipelineSettings.applyNewDealDefaults(opp);
+        DealHealthService.Health health = dealHealth.evaluate(opp, now, dealHealth.benchmarks(opp.getOrganizationId()));
+        dealHealth.apply(opp, health, now);
         opportunityRepository.save(opp);
+        pipelineSettings.recordNewDeal(opp, actor.getId());
         auditService.log("create", "opportunities", opp.getId(), opp.getName(), null, opp);
+        dealHealth.notifyRaised(opp, Set.of(), health, actor.getId());
         if (pipelineSettings.isBigDeal(opp.getOrganizationId(), opp)) {
             pipelineSettings.alertBigDeal(actor, opp, "created");
         }
@@ -206,11 +238,19 @@ public class OpportunityController {
             tenantGuard.requireContact(p.lng("contactId"));
         }
 
+        ForecastCategory requestedCategory = p.hasValue("forecastCategory") ? ForecastCategory.parse(p.str("forecastCategory")) : null;
+
         Opportunity before = snapshot(existing);
+        Set<DealHealthService.Flag> previousFlags = DealHealthService.parseFlags(existing.getHealthFlags());
         apply(existing, p);
         if (!permissionService.canViewOpportunityValue(actor)) existing.setValue(before.getValue());
         if (newOwner != null) existing.setOwnerId(newOwner);
         if (p.hasValue("stage")) existing.setStage(p.str("stage"));
+        // a close date pushed later counts as a slip (pulling it in does not)
+        if (before.getCloseDate() != null && existing.getCloseDate() != null
+                && existing.getCloseDate().isAfter(before.getCloseDate())) {
+            existing.setCloseDateSlips(existing.getCloseDateSlips() + 1);
+        }
 
         // Probability: a manual value marks the deal overridden; clearing the flag
         // (or a stage change on a non-overridden deal) applies the stage default.
@@ -225,9 +265,18 @@ public class OpportunityController {
             existing.setProbability(pipelineSettings.get(existing.getOrganizationId()).probabilityFor(existing.getStage()));
         }
         applyCloseTransition(existing, before.getStage(), p);
-        existing.setUpdatedAt(Instant.now());
+        applyForecastCategory(existing, stageChanged, requestedCategory, p);
+        Instant now = Instant.now();
+        if (stageChanged) existing.setStageEnteredAt(now);
+        DealHealthService.Health health = dealHealth.evaluate(existing, now, dealHealth.benchmarks(existing.getOrganizationId()));
+        dealHealth.apply(existing, health, now);
+        existing.setUpdatedAt(now);
         opportunityRepository.saveAndFlush(existing);
+        if (stageChanged) {
+            stageHistory.recordChange(existing, before.getStage(), before.getStageEnteredAt(), actor.getId(), now);
+        }
         auditService.log("update", "opportunities", id, existing.getName(), before, existing);
+        dealHealth.notifyRaised(existing, previousFlags, health, actor.getId());
 
         String newStage = existing.getStage();
         if (stageChanged && existing.getOwnerId() != null && !existing.getOwnerId().equals(actor.getId())) {
@@ -335,6 +384,40 @@ public class OpportunityController {
             String reason = p.str("closeReason").trim();
             opp.setCloseReason(reason.length() > 500 ? reason.substring(0, 500) : reason);
         }
+    }
+
+    /**
+     * Forecast category (HubSpot model): synced from the org's stage mapping on
+     * every stage change unless the rep overrode it. Closing a deal always applies
+     * the closed stage's category and clears the override; sending
+     * {@code forecastCategoryOverridden: false} goes back to the mapping.
+     */
+    private void applyForecastCategory(Opportunity opp, boolean stageChanged, ForecastCategory requested, Patch p) {
+        boolean closed = PipelineSettingsService.CLOSED_STAGES.contains(opp.getStage());
+        ForecastCategory mapped = pipelineSettings.get(opp.getOrganizationId()).categoryFor(opp.getStage());
+        if (requested != null && requested != opp.getForecastCategory()) {
+            opp.setForecastCategory(validCategoryOverride(opp.getStage(), requested.name()));
+            opp.setForecastCategoryOverridden(true);
+        } else if (p.has("forecastCategoryOverridden") && Boolean.FALSE.equals(p.bool("forecastCategoryOverridden"))) {
+            opp.setForecastCategoryOverridden(false);
+        }
+        if (closed && (stageChanged || opp.isForecastCategoryOverridden())) {
+            if (requested != null && requested != mapped) {
+                throw new IllegalArgumentException("a " + opp.getStage() + " deal is always " + mapped);
+            }
+            opp.setForecastCategoryOverridden(false);
+        }
+        if (!opp.isForecastCategoryOverridden()) opp.setForecastCategory(mapped);
+    }
+
+    /** A rep override: open deals only, and never CLOSED_WON (reserved for won deals). */
+    private static ForecastCategory validCategoryOverride(String stage, String value) {
+        ForecastCategory c = ForecastCategory.parse(value);
+        if (PipelineSettingsService.CLOSED_STAGES.contains(stage)) {
+            throw new IllegalArgumentException("the forecast category of a " + stage + " deal cannot be overridden");
+        }
+        if (c == ForecastCategory.CLOSED_WON) throw new IllegalArgumentException("only Won deals can be CLOSED_WON");
+        return c;
     }
 
     /** Client-editable fields; stage, owner, probability and server columns are handled by the caller. */

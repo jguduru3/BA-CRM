@@ -1,5 +1,6 @@
 package com.betteranalytics.crm.entity;
 
+import com.fasterxml.jackson.annotation.JsonRawValue;
 import jakarta.persistence.*;
 import org.hibernate.annotations.DynamicUpdate;
 import org.hibernate.annotations.SQLRestriction;
@@ -115,4 +116,43 @@ public class Opportunity {
 
     @Column(name = "closed_at")
     private Instant closedAt;
+
+    // V61 — forecast category (synced from the stage mapping unless the rep overrode it).
+    @Enumerated(EnumType.STRING)
+    @Column(name = "forecast_category", length = 20)
+    private ForecastCategory forecastCategory;
+
+    @Column(name = "forecast_category_overridden", nullable = false)
+    private boolean forecastCategoryOverridden = false;
+
+    // V61 — how many times the expected close date was pushed later.
+    @Column(name = "close_date_slips", nullable = false)
+    private int closeDateSlips = 0;
+
+    // V61 — when the deal entered its current stage.
+    @Column(name = "stage_entered_at")
+    private Instant stageEnteredAt;
+
+    // V61 — rules-based deal health 0..100 (null for closed deals) and its explanation.
+    @Column(name = "health_score")
+    private Integer healthScore;
+
+    /** JSON array of {key, label, points, detail}; serialised as raw JSON. */
+    @JsonRawValue
+    @Column(name = "health_factors", columnDefinition = "TEXT")
+    private String healthFactors;
+
+    /** Comma-separated raised risk flags; used to notify once per flag change. */
+    @Column(name = "health_flags", length = 200)
+    private String healthFlags;
+
+    @Column(name = "health_computed_at")
+    private Instant healthComputedAt;
+
+    /** Weighted amount = value × probability / 100 (null when either is masked). */
+    @Transient
+    public Long getWeightedValue() {
+        if (value == null || probability == null) return null;
+        return Math.round(value * (probability / 100.0));
+    }
 }

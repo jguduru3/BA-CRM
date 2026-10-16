@@ -3,6 +3,7 @@ package com.betteranalytics.crm.controller;
 import com.betteranalytics.crm.core.Patch;
 import com.betteranalytics.crm.core.PipelineSettingsService;
 import com.betteranalytics.crm.core.PipelineSettingsService.Settings;
+import com.betteranalytics.crm.entity.ForecastCategory;
 import com.betteranalytics.crm.entity.Role;
 import com.betteranalytics.crm.entity.User;
 import com.betteranalytics.crm.security.CurrentUser;
@@ -58,8 +59,20 @@ public class PipelineSettingsController {
                 probabilities.put(e.getKey(), e.getValue().asInt());
             }
         }
+        Map<String, String> categories = null;
+        JsonNode cats = body == null ? null : body.get("stageForecastCategories");
+        if (cats != null && !cats.isNull()) {
+            if (!cats.isObject()) throw new IllegalArgumentException("stageForecastCategories must be an object of stage → category");
+            categories = new LinkedHashMap<>();
+            Iterator<Map.Entry<String, JsonNode>> it = cats.fields();
+            while (it.hasNext()) {
+                Map.Entry<String, JsonNode> e = it.next();
+                if (!e.getValue().isTextual()) throw new IllegalArgumentException("forecast category for " + e.getKey() + " must be a string");
+                categories.put(e.getKey(), e.getValue().asText());
+            }
+        }
         Settings[] change = service.save(actor.getOrganizationId(), actor.getId(), probabilities,
-                p.lng("bigDealThreshold"), p.has("bigDealThreshold"));
+                p.lng("bigDealThreshold"), p.has("bigDealThreshold"), categories);
         auditService.log("update", "pipeline_settings", actor.getOrganizationId(), "Pipeline settings",
                 toJson(change[0]), toJson(change[1]));
         return toJson(change[1]);
@@ -70,6 +83,18 @@ public class PipelineSettingsController {
         m.put("stages", PipelineSettingsService.STAGES);
         m.put("stageProbabilities", s.stageProbabilities());
         m.put("bigDealThreshold", s.bigDealThreshold());
+        Map<String, String> cats = new LinkedHashMap<>();
+        PipelineSettingsService.STAGES.forEach(st -> cats.put(st, s.categoryFor(st).name()));
+        m.put("stageForecastCategories", cats);
+        List<Map<String, Object>> all = new ArrayList<>();
+        for (ForecastCategory c : ForecastCategory.values()) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("key", c.name());
+            row.put("label", c.label());
+            row.put("order", c.ordinal());
+            all.add(row);
+        }
+        m.put("forecastCategories", all);
         return m;
     }
 }

@@ -127,7 +127,9 @@ public class LeadWorkflowService {
         opp.setSourcedByUserId(lead.getOwnerId());
         opp.setCreatedAt(now);
         opp.setUpdatedAt(now);
+        pipelineSettings.applyNewDealDefaults(opp); // forecast category + stage-entered time
         opportunityRepository.saveAndFlush(opp); // unique source_lead_id is the last line of defence
+        pipelineSettings.recordNewDeal(opp, actor.getId()); // initial stage-history row
 
         lead.setStage("Won");
         lead.setConvertedAt(now);
